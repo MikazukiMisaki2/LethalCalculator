@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "catalog_version": 1,
+  "rules": {
+    "1": {
+      "card_id": 1,
+      "support": "generated",
+      "modes": [{"kind": "normal", "cost": 1, "abilities": [{"trigger": "on_play", "effects": [{"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 2}]}]}]
+    }
+  }
+}

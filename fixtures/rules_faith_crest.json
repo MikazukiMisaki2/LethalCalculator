@@ -1,0 +1,75 @@
+{
+  "schema_version": 2,
+  "catalog_version": 1,
+  "game_version": "fixture",
+  "resources": {
+    "faith": {
+      "instances": [
+        {
+          "source_card_id": 10614120,
+          "unique_id": 501,
+          "value": 17,
+          "initial_value": 0,
+          "abilities": [
+            {
+              "trigger": "on_ally_follower_evolve",
+              "effects": [{"op": "modify_resource", "resource": "faith", "amount": 1}]
+            }
+          ]
+        },
+        {
+          "source_card_id": 10664120,
+          "unique_id": 502,
+          "value": 8,
+          "initial_value": 0,
+          "abilities": [
+            {
+              "trigger": "on_ally_amulet_destroy",
+              "effects": [{"op": "modify_resource", "resource": "faith", "amount": 1}]
+            }
+          ]
+        }
+      ]
+    },
+    "crests": [
+      {"card_id": 10364122, "unique_id": 601, "countdown": 3, "faith_value": 17, "variable_x": 0, "supplement_info": {"faith": 17}}
+    ]
+  },
+  "rules": {
+    "10614120": {
+      "card_id": 10614120,
+      "support": "verified",
+      "static_keywords": ["drain"],
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 1,
+          "abilities": [
+            {
+              "trigger": "on_play",
+              "effects": [
+                {"op": "modify_resource", "resource": "faith", "amount": -10},
+                {"op": "add_to_hand", "card_id": 90014330, "count": 1},
+                {"op": "grant_resource_ability", "resource": "faith", "ability": {"trigger": "on_ally_follower_evolve", "effects": [{"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 1}]}}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "10664120": {
+      "card_id": 10664120,
+      "support": "verified",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 9,
+          "abilities": [
+            {"trigger": "on_play", "effects": [{"op": "destroy", "target": {"scope": "any", "count": 3, "selection": "chosen", "filters": {"exclude_self": true, "zone": "field"}}}]},
+            {"trigger": "on_turn_end", "condition": {"state": "faith.value", "cmp": "gte", "value": 10}, "effects": [{"op": "modify_resource", "resource": "faith", "amount": -10}, {"op": "add_to_hand", "card_id": 90064320, "count": 1}]}
+          ]
+        }
+      ]
+    }
+  }
+}

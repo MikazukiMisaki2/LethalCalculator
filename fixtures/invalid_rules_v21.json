@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "name": "repeat_requires_count_and_effects",
+      "effect": {"op": "repeat"}
+    },
+    {
+      "name": "damage_requires_target_and_amount",
+      "effect": {"op": "damage", "amount": 3}
+    },
+    {
+      "name": "conditional_requires_condition",
+      "effect": {"op": "conditional", "effects": [{"op": "draw", "count": 1}]}
+    },
+    {
+      "name": "auto_evolve_requires_kind",
+      "effect": {"op": "auto_evolve", "target": {"scope": "self"}}
+    },
+    {
+      "name": "unknown_condition_state_is_rejected",
+      "effect": {
+        "op": "conditional",
+        "condition": {"state": "invented_counter", "cmp": "gte", "value": 1},
+        "effects": [{"op": "draw", "count": 1}]
+      }
+    },
+    {
+      "name": "random_choice_requires_nonempty_choices",
+      "effect": {"op": "random_choice", "choices": []}
+    }
+  ]
+}

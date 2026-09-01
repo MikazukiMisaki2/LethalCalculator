@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "shadowverse-wb://schemas/card-rules-v2.json",
+  "title": "Shadowverse WB executable card rules",
+  "type": "object",
+  "required": ["schema_version", "catalog_version", "rules"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "ruleset_revision": {"type": "integer", "minimum": 1},
+    "catalog_version": {"type": "integer"},
+    "game_version": {"type": "string"},
+    "rules": {
+      "type": "object",
+      "patternProperties": {"^[0-9]+$": {"$ref": "#/$defs/rule"}},
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "faith": {"$ref": "#/$defs/resource"},
+        "crests": {"type": "array", "items": {"$ref": "#/$defs/crest"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "value": {
+      "oneOf": [
+        {"type": "number"},
+        {"type": "boolean"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/value"}},
+        {"type": "object", "required": ["op"], "properties": {"op": {"type": "string"}, "args": {"type": "array", "items": {"$ref": "#/$defs/value"}}}, "additionalProperties": true}
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        {"type": "object", "required": ["all"], "properties": {"all": {"type": "array", "items": {"$ref": "#/$defs/condition"}}}, "additionalProperties": false},
+        {"type": "object", "required": ["any"], "properties": {"any": {"type": "array", "items": {"$ref": "#/$defs/condition"}}}, "additionalProperties": false},
+        {"type": "object", "required": ["not"], "properties": {"not": {"$ref": "#/$defs/condition"}}, "additionalProperties": false},
+        {"type": "object", "required": ["state", "cmp", "value"], "properties": {"state": {"enum": ["pp", "max_pp", "extra_pp", "ep", "sep", "rally", "play_count", "cemetery", "earth_sigil", "is_awakening", "awakening", "faith", "faith.value", "faith.instance_count", "crest_count", "crest.count", "skybound_art", "super_skybound_art", "necromancy", "board_count", "ally_board_count", "enemy_board_count", "card_type", "tribe", "evolved", "super_evolved", "source_life", "evolved_allies_this_turn", "evolved_allies_this_match", "played_base_cost_set", "attacked_with_follower_this_turn", "variable"]}, "name": {"type": "string"}, "cmp": {"enum": ["eq", "ne", "gte", "gt", "lte", "lt", "contains_all"]}, "value": {"$ref": "#/$defs/value"}}, "additionalProperties": false}
+      ]
+    },
+    "target": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {"enum": ["self", "trigger_source", "ally_leader", "enemy_leader", "ally_follower", "enemy_follower", "any"]},
+        "count": {"$ref": "#/$defs/value"},
+        "selection": {"enum": ["chosen", "all", "random", "lowest_life", "highest_attack"]},
+        "allocation": {"enum": ["split", "ordered_split", "each"]},
+        "filters": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "value": {"$ref": "#/$defs/value"},
+        "minimum": {"$ref": "#/$defs/value"},
+        "maximum": {"$ref": "#/$defs/value"},
+        "source_card_id": {"type": "integer"},
+        "abilities": {"type": "array", "items": {"$ref": "#/$defs/ability"}},
+        "instances": {"type": "array", "items": {"$ref": "#/$defs/resource_instance"}}
+      },
+      "additionalProperties": false
+    },
+    "crest": {
+      "type": "object",
+      "required": ["card_id"],
+      "properties": {
+        "card_id": {"type": "integer"},
+        "unique_id": {"type": "integer"},
+        "countdown": {"$ref": "#/$defs/value"},
+        "faith_value": {"$ref": "#/$defs/value"},
+        "variable_x": {"$ref": "#/$defs/value"},
+        "supplement_info": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}}
+      },
+      "additionalProperties": false
+    },
+    "resource_instance": {
+      "type": "object",
+      "required": ["source_card_id", "value"],
+      "properties": {
+        "source_card_id": {"type": "integer"},
+        "unique_id": {"type": "integer"},
+        "value": {"$ref": "#/$defs/value"},
+        "initial_value": {"$ref": "#/$defs/value"},
+        "mode_limit_bonus": {"$ref": "#/$defs/value"},
+        "abilities": {"type": "array", "items": {"$ref": "#/$defs/ability"}}
+      },
+      "additionalProperties": false
+    },
+    "effect": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": {"enum": ["damage", "heal", "buff", "grant_keyword", "remove_keyword", "summon", "destroy", "banish", "draw", "add_to_hand", "discard", "return_to_hand", "return_to_deck", "recover_pp", "modify_cost", "set_cost", "modify_counter", "modify_resource", "consume_resource", "grant_resource_ability", "gain_crest", "modify_crest", "destroy_crest", "set_attacks", "spellboost", "reanimate", "invoke", "transform", "copy", "auto_evolve", "replicate_ability", "sequence", "progressive_sequence", "conditional", "repeat", "random_choice", "random_target", "mode_choice", "activate_all_mode_choices"]},
+        "target": {"$ref": "#/$defs/target"},
+        "amount": {"$ref": "#/$defs/value"},
+        "attack": {"$ref": "#/$defs/value"},
+        "life": {"$ref": "#/$defs/value"},
+        "card_id": {"type": "integer"},
+        "count": {"$ref": "#/$defs/value"},
+        "cost": {"$ref": "#/$defs/value"},
+        "keyword": {"type": "string"},
+        "resource": {"enum": ["faith", "cemetery", "earth_sigil", "rally", "play_count", "pp", "extra_pp", "ep", "sep", "skybound_art"]},
+        "resource_selector": {"type": "object", "additionalProperties": true},
+        "ability": {"$ref": "#/$defs/ability"},
+        "field": {"enum": ["countdown", "faith_value", "variable_x", "mode_limit"]},
+        "delta": {"$ref": "#/$defs/value"},
+        "condition": {"$ref": "#/$defs/condition"},
+        "evolution_kind": {"enum": ["normal", "super"]},
+        "trigger": {"type": "string"},
+        "destination": {"enum": ["hand", "deck", "field", "cemetery", "banished"]},
+        "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}},
+        "else_effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}},
+        "choices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/random_branch"}}
+        ,"steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/random_branch"}}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"op": {"enum": ["damage", "heal"]}}}, "then": {"required": ["target", "amount"]}},
+        {"if": {"properties": {"op": {"const": "buff"}}}, "then": {"required": ["target"], "anyOf": [{"required": ["amount"]}, {"required": ["attack"]}, {"required": ["life"]}]}},
+        {"if": {"properties": {"op": {"const": "repeat"}}}, "then": {"required": ["count", "effects"]}},
+        {"if": {"properties": {"op": {"const": "conditional"}}}, "then": {"required": ["condition", "effects"]}},
+        {"if": {"properties": {"op": {"const": "random_choice"}}}, "then": {"required": ["choices"]}},
+        {"if": {"properties": {"op": {"const": "random_target"}}}, "then": {"required": ["target", "effects"]}},
+        {"if": {"properties": {"op": {"const": "mode_choice"}}}, "then": {"required": ["choices"]}},
+        {"if": {"properties": {"op": {"const": "progressive_sequence"}}}, "then": {"required": ["steps"]}},
+        {"if": {"properties": {"op": {"const": "auto_evolve"}}}, "then": {"required": ["target", "evolution_kind"]}},
+        {"if": {"properties": {"op": {"const": "replicate_ability"}}}, "then": {"required": ["trigger"]}},
+        {"if": {"properties": {"op": {"enum": ["modify_resource", "consume_resource"]}}}, "then": {"required": ["resource", "amount"]}}
+      ]
+    },
+    "random_branch": {
+      "type": "object",
+      "required": ["effects"],
+        "properties": {
+        "label": {"type": "string"},
+        "weight": {"$ref": "#/$defs/value"},
+        "effects": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/effect"}}
+      },
+      "additionalProperties": false
+    },
+    "ability": {
+      "type": "object",
+      "required": ["trigger", "effects"],
+      "properties": {
+        "id": {"type": "string"},
+        "trigger": {"enum": ["on_play", "on_fanfare", "on_evolve", "on_super_evolve", "on_ally_follower_evolve", "on_ally_follower_super_evolve", "on_enemy_follower_super_evolve", "on_attack", "on_clash", "on_survive_damage", "on_follower_attack", "on_leader_attack", "on_damage", "on_summon", "on_ally_follower_summon", "on_destroy", "on_ally_amulet_destroy", "on_last_word", "on_turn_start", "on_turn_end", "on_opponent_turn_end", "on_mode_selected", "on_card_play", "on_spell_play", "on_spellboost", "on_engage", "on_crest_gain", "on_crest_countdown", "on_crest"]},
+        "condition": {"$ref": "#/$defs/condition"},
+        "cost": {"type": "integer", "minimum": 0},
+        "effects": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/effect"}}
+      },
+      "additionalProperties": false
+    },
+    "mode": {
+      "type": "object",
+      "required": ["kind", "cost", "abilities"],
+      "properties": {
+        "kind": {"enum": ["normal", "enhance", "accelerate", "crystallize", "fusion", "activation"]},
+        "cost": {"$ref": "#/$defs/value"},
+        "abilities": {"type": "array", "items": {"$ref": "#/$defs/ability"}},
+        "selection_count": {"$ref": "#/$defs/value"},
+        "selection_limit": {"$ref": "#/$defs/value"}
+      },
+      "additionalProperties": false
+    },
+    "rule": {
+      "type": "object",
+      "required": ["card_id", "support", "modes"],
+      "properties": {
+        "card_id": {"type": "integer"},
+        "support": {"enum": ["verified", "generated", "partial", "unsupported"]},
+        "source_hash": {"type": "string"},
+        "static_keywords": {"type": "array", "items": {"type": "string"}},
+        "variables": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
+        "countdown": {"$ref": "#/$defs/value"},
+        "fusion": {"type": "array", "items": {"$ref": "#/$defs/fusion_config"}},
+        "modes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/mode"}},
+        "unparsed_clauses": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fusion_config": {
+      "type": "object",
+      "required": ["filters"],
+      "properties": {
+        "filters": {"type": "object", "additionalProperties": true},
+        "aggregate": {"enum": ["total_cost", "count"]},
+        "outcomes": {"type": "array", "items": {"type": "object", "required": ["min", "max", "card_id"], "properties": {"min": {"type": "integer", "minimum": 0}, "max": {"type": ["integer", "null"], "minimum": 0}, "card_id": {"type": "integer"}}, "additionalProperties": false}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

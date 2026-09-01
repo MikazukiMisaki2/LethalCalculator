@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "catalog_version": 1,
+  "rules": {
+    "10413110": {
+      "card_id": 10413110,
+      "support": "partial",
+      "modes": [{"kind": "normal", "cost": 4, "abilities": [{"trigger": "on_evolve", "effects": [{"op": "repeat", "count": 7, "effects": [{"op": "damage", "target": {"scope": "enemy_follower", "selection": "random", "count": 1}, "amount": 1}]}]}]}]
+    }
+  }
+}

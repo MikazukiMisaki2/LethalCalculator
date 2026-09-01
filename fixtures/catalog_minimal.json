@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "game_version": "fixture",
+  "type_map": {"follower": 1, "amulet": 2, "countdown_amulet": 3, "spell": 4},
+  "cards": {
+    "10614120": {
+      "card_id": 10614120,
+      "base_card_id": 10614120,
+      "name": {"chs": "古旧天枪·萨莎妮德", "eng": "Sathanid, Eld Lance"},
+      "type": "follower",
+      "raw_type": 1,
+      "cost": 1,
+      "stats": {"attack": 1, "life": 1},
+      "class_id": 1,
+      "tribes": [19],
+      "evolves_to": 10614121,
+      "related_card_ids": [90014330],
+      "specific_effect_card_ids": [10614122],
+      "skill_refs": [],
+      "text": {"skill_texts": [{"key": "skill", "chs": "信仰值-10", "eng": "Reduce your faith's value by 10."}]},
+      "alt_modes": [{"type_key": "faith", "type": "信仰", "cost": 0, "text": {"chs": "信仰值起始为0。", "eng": "This faith's value starts at 0."}}],
+      "sources": {"cards_json": true, "effects_json": false}
+    }
+  }
+}

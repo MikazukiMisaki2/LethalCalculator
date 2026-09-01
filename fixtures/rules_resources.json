@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "catalog_version": 1,
+  "resources": {
+    "faith": {"instances": [{"source_card_id": 10, "unique_id": 100, "value": 10, "initial_value": 0}]},
+    "crests": [{"card_id": 20, "unique_id": 200, "countdown": 2, "variable_x": 3}]
+  },
+  "rules": {
+    "10": {
+      "card_id": 10,
+      "support": "partial",
+      "modes": [{"kind": "normal", "cost": 2, "abilities": [{"trigger": "on_play", "condition": {"state": "faith", "cmp": "gte", "value": 10}, "effects": [{"op": "consume_resource", "resource": "faith", "amount": 10}, {"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 3}]}]}]
+    }
+  }
+}

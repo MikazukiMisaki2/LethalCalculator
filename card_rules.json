@@ -1,0 +1,3112 @@
+{
+  "10001110": {
+    "name": "不屈的剑斗士",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 4
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10012120": {
+    "name": "音速射手·塞尔文",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10021110": {
+    "name": "须臾剑士",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10021130": {
+    "name": "人马骑士",
+    "cost": 8,
+    "type": 1,
+    "atk": 7,
+    "life": 5,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10022120": {
+    "name": "魔煌的诡谲者·拉斯提",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10031110": {
+    "name": "闪光魔法剑士",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "earth_sigil_gte": 1
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10041130": {
+    "name": "凶鲨战士",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 6,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 6
+          }
+        ]
+      }
+    ]
+  },
+  "10051110": {
+    "name": "魔狼首领",
+    "cost": 6,
+    "type": 1,
+    "atk": 3,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10051130": {
+    "name": "恶毒的小木乃伊",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "cemetery_gte": 4
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10062120": {
+    "name": "神圣狮鹫",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 8,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10104110": {
+    "name": "勇武的堕天使·奥莉薇",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10112130": {
+    "name": "年幼宝石兽",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10113140": {
+    "name": "屠戮破魔虫",
+    "cost": 3,
+    "type": 1,
+    "atk": 0,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10114110": {
+    "name": "自然妖精公主·阿丽雅",
+    "cost": 6,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己的妖精·随从进入战场时，使其获得【疾驰】。",
+        "effects": [
+          {
+            "op": "passive_grant_on_summon",
+            "target_tribe": "fairy",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10114120": {
+    "name": "丰丽的玫瑰皇后",
+    "cost": 9,
+    "type": 1,
+    "atk": 6,
+    "life": 6,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10122110": {
+    "name": "统率的鲁米那斯骑士",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10123110": {
+    "name": "雷维翁之斧·杰诺",
+    "cost": 7,
+    "type": 1,
+    "atk": 7,
+    "life": 6,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10123120": {
+    "name": "沉默的狙击手·瓦路兹",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 6
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10123310": {
+    "name": "触手撕咬",
+    "cost": 7,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 5
+          }
+        ]
+      }
+    ]
+  },
+  "10124110": {
+    "name": "雷维翁的迅雷·阿尔贝尔",
+    "cost": 5,
+    "type": 1,
+    "atk": 3,
+    "life": 5,
+    "static": {
+      "has_storm": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10124120": {
+    "name": "白银骑士团团长·艾蜜莉亚",
+    "cost": 6,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10124130": {
+    "name": "常在战场·景光",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10131110": {
+    "name": "符文剑操控师",
+    "cost": 5,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10133130": {
+    "name": "理光的天宫·艾德薇诗",
+    "cost": 4,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10134110": {
+    "name": "五行之巅·久苑",
+    "cost": 7,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "grant_status",
+            "target": "other_ally_follower",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10141120": {
+    "name": "海沟大剑龙",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 6,
+    "on_play": [
+      {
+        "if": {
+          "overflow": true
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10142120": {
+    "name": "御风者·叶花",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10142130": {
+    "name": "读风者·杰鲁",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "grant_status",
+            "target": "other_ally_follower",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10143110": {
+    "name": "再临之创世龙",
+    "cost": 10,
+    "type": 1,
+    "atk": 9,
+    "life": 10,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10144120": {
+    "name": "霸道的龙翼·法露特",
+    "cost": 6,
+    "type": 1,
+    "atk": 5,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10144130": {
+    "name": "龙人演义·卧龙",
+    "cost": 8,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10151110": {
+    "name": "午夜眷属·埃拉尔",
+    "cost": 3,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10153140": {
+    "name": "地下赏金猎人·巴尔特",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 1,
+    "crest_rules": [
+      {
+        "raw_crest_text": "【吟唱_4】 自己的回合结束时，对所有主战者造成1点伤害。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10153310": {
+    "name": "蛇神之怒",
+    "cost": 2,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10154130": {
+    "name": "无极猎人·阿拉加维",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 3,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10161140": {
+    "name": "潜伏的曼纽",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10162110": {
+    "name": "煌枪魔兔·萨莉沙",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10162120": {
+    "name": "煌翼羽人·莉诺",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 5,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ],
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10163130": {
+    "name": "伟大的炽天使·勒碧丝",
+    "cost": 8,
+    "type": 1,
+    "atk": 7,
+    "life": 6,
+    "crest_rules": [
+      {
+        "raw_crest_text": "【吟唱_2】 【谢幕曲】召唤1个『伟大的炽天使·勒碧丝』，使其获得【疾驰】。",
+        "effects": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10173130": {
+    "name": "疯狂的创造者·历亚姆",
+    "cost": 9,
+    "type": 1,
+    "atk": 7,
+    "life": 7,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10174120": {
+    "name": "迈进之心·奥契丝",
+    "cost": 8,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10204110": {
+    "name": "命运黄昏·奥丁",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10222120": {
+    "name": "平凡骑士·拉奇尔",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10224120": {
+    "name": "雷维翁超越者·尤里乌斯",
+    "cost": 8,
+    "type": 1,
+    "atk": 5,
+    "life": 7,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10231310": {
+    "name": "冰锥穿击",
+    "cost": 4,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "if": {
+          "earth_sigil_gte": 1
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10252110": {
+    "name": "爆破之翼·圮尤拉",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 4,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10253110": {
+    "name": "悲惨战争·萝拉",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 2,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "grant_status",
+            "target": "other_ally_follower",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10253120": {
+    "name": "夜曲将军·艾瑟拉",
+    "cost": 4,
+    "type": 1,
+    "atk": 1,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10263110": {
+    "name": "速断之刃·阿尼耶丝",
+    "cost": 5,
+    "type": 1,
+    "atk": 3,
+    "life": 4,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10274120": {
+    "name": "精神武艺·迦尔拉",
+    "cost": 5,
+    "type": 1,
+    "atk": 5,
+    "life": 4,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10301310": {
+    "name": "至高的凌驾",
+    "cost": 4,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10303110": {
+    "name": "充满勇气之人",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 1,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10311120": {
+    "name": "妖精剑的后继者",
+    "cost": 2,
+    "type": 1,
+    "atk": 1,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10323110": {
+    "name": "篡夺的团结者",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10344110": {
+    "name": "侮蔑的继承者·安吉拉弗利特",
+    "cost": 9,
+    "type": 1,
+    "atk": 5,
+    "life": 7,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10344120": {
+    "name": "烈绝的显现·嘉尔缪",
+    "cost": 5,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 7
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10351110": {
+    "name": "混融的肯定者",
+    "cost": 3,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10351120": {
+    "name": "泡沫鬼姬",
+    "cost": 8,
+    "type": 1,
+    "atk": 4,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10353310": {
+    "name": "叫唤与憎恶",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10403120": {
+    "name": "掌握天空命运的少女·露莉亚",
+    "cost": 2,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 7
+          }
+        ]
+      }
+    ]
+  },
+  "10411110": {
+    "name": "爱恨舞者·晧&曜",
+    "cost": 7,
+    "type": 1,
+    "atk": 8,
+    "life": 6,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10412310": {
+    "name": "绮罗星",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "crest_rules": [
+      {
+        "raw_crest_text": "【吟唱_1】 【谢幕曲】对对手的主战者造成1点伤害。将1张『绮罗星』加入手牌。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10413110": {
+    "name": "幻彩弓手·丘比丹",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "super_skybound_art": true
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10414110": {
+    "name": "风之法则·艾云尼亚",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "if": {
+          "skybound_art": true
+        },
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10421110": {
+    "name": "信念腿法·兰德尔",
+    "cost": 2,
+    "type": 1,
+    "atk": 3,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 5
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10421130": {
+    "name": "迷茫的狮子·莫德雷德",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10423310": {
+    "name": "骁勇骑士",
+    "cost": 5,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10424110": {
+    "name": "真红与群青·塞达&贝阿朵丽丝",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 2,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10433110": {
+    "name": "缅怀之火·埃尔默特",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己的回合开始时，对对手的主战者造成1点伤害。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10433310": {
+    "name": "炼金炎爆",
+    "cost": 2,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "if": {
+          "skybound_art": true
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10434110": {
+    "name": "水之法则·瓦姆杜斯",
+    "cost": 3,
+    "type": 1,
+    "atk": 0,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10442120": {
+    "name": "淳朴的钢铁之躯·无限",
+    "cost": 8,
+    "type": 1,
+    "atk": 10,
+    "life": 8,
+    "on_play": [
+      {
+        "if": {
+          "super_skybound_art": true
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10444120": {
+    "name": "世界的伙伴·佐伊",
+    "cost": 5,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 10
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10451110": {
+    "name": "憧憬的铁锤·阿尔梅达",
+    "cost": 2,
+    "type": 1,
+    "atk": 3,
+    "life": 1,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10452130": {
+    "name": "元素共鸣·巴尔",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10454120": {
+    "name": "狡诈的堕天司·彼列",
+    "cost": 7,
+    "type": 1,
+    "atk": 7,
+    "life": 6,
+    "crest_rules": [
+      {
+        "raw_crest_text": "【吟唱_4】 【谢幕曲】对对手的主战者造成20点伤害。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 20
+          }
+        ]
+      }
+    ]
+  },
+  "10461110": {
+    "name": "英雄幻视·托路",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10471110": {
+    "name": "夜王再起·翔",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10472120": {
+    "name": "严厉的教官·伊尔莎",
+    "cost": 7,
+    "type": 1,
+    "atk": 7,
+    "life": 6,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 4
+          }
+        ]
+      }
+    ]
+  },
+  "10501110": {
+    "name": "挥毫的怪物",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10511120": {
+    "name": "森林羽子板工匠",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10514120": {
+    "name": "虫风花·魅禄",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10521120": {
+    "name": "烟管美玉",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10543310": {
+    "name": "懒惰的波摇花",
+    "cost": 2,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "if": {
+          "overflow": true
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10544110": {
+    "name": "约束的《正义》·伊兰翠",
+    "cost": 10,
+    "type": 1,
+    "atk": 8,
+    "life": 8,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 8
+          }
+        ]
+      }
+    ]
+  },
+  "10571110": {
+    "name": "舞台缔造者",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 7
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10601110": {
+    "name": "浑浊之民",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10603110": {
+    "name": "彷徨于黑暗之兽",
+    "cost": 6,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10604110": {
+    "name": "恐惧的象征·欧米伽奥提普",
+    "cost": 9,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 4
+          }
+        ]
+      }
+    ]
+  },
+  "10612120": {
+    "name": "咆哮狼人",
+    "cost": 6,
+    "type": 1,
+    "atk": 5,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10614110": {
+    "name": "慈爱的凛华·奥尔提雅",
+    "cost": 8,
+    "type": 1,
+    "atk": 7,
+    "life": 7,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10614120": {
+    "name": "古旧天枪·萨莎妮德",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10621110": {
+    "name": "勇烈的士兵",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 3
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10622110": {
+    "name": "忠烈的近卫兵",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 4
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10622120": {
+    "name": "猫人水手",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10623110": {
+    "name": "暴烈的参谋",
+    "cost": 4,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 6
+        },
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10624110": {
+    "name": "惨烈的剑王·罗德诺艾尔四世",
+    "cost": 6,
+    "type": 1,
+    "atk": 4,
+    "life": 5,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 8
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10633310": {
+    "name": "魔恋的天晶",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10634120": {
+    "name": "古旧天晶·卡卢基典瑟拉",
+    "cost": 10,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10644110": {
+    "name": "断头的斩姬·相枛津",
+    "cost": 7,
+    "type": 1,
+    "atk": 5,
+    "life": 4,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10652120": {
+    "name": "失恋恶魔",
+    "cost": 4,
+    "type": 1,
+    "atk": 4,
+    "life": 5,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 7
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10653310": {
+    "name": "枯渴的天眼",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10663210": {
+    "name": "崇高的天书",
+    "cost": 4,
+    "type": 2,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10703210": {
+    "name": "巴别隆城",
+    "cost": 1,
+    "type": 2,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10712110": {
+    "name": "绿风细剑师",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "if": {
+          "combo_gte": 3
+        },
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10724110": {
+    "name": "统音的安纳提玛·吉尔达利娅",
+    "cost": 4,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "crest_rules": [
+      {
+        "raw_crest_text": "【吟唱_1】 自己的随从进入战场时，若为自己的回合，则对对手的主战者造成1点伤害。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10734120": {
+    "name": "可爱杰作",
+    "cost": 8,
+    "type": 1,
+    "atk": 4,
+    "life": 8,
+    "on_play": [
+      {
+        "if": {
+          "earth_sigil_gte": 2
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10743310": {
+    "name": "黑炎的奔流",
+    "cost": 7,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10753110": {
+    "name": "骸骨驯兽师",
+    "cost": 7,
+    "type": 1,
+    "atk": 3,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10753310": {
+    "name": "夜之歌的演唱会",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "if": {
+          "cemetery_gte": 6
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10754120": {
+    "name": "死亡主持人·马克米朗",
+    "cost": 9,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10762120": {
+    "name": "传言圣鸟",
+    "cost": 8,
+    "type": 1,
+    "atk": 4,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10773310": {
+    "name": "瞬移斩击",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10774110": {
+    "name": "虚刻的安纳提玛·斯卡雷特",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10774120": {
+    "name": "奋厉追赶·米乌",
+    "cost": 4,
+    "type": 1,
+    "atk": 3,
+    "life": 5,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10801110": {
+    "name": "自律的圣鸟·汉萨",
+    "cost": 2,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 5
+          }
+        ]
+      }
+    ]
+  },
+  "10801120": {
+    "name": "无尽旅途·蕾娜",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10802110": {
+    "name": "激动的欢喜·阿尔菲德",
+    "cost": 4,
+    "type": 1,
+    "atk": 1,
+    "life": 3,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10804120": {
+    "name": "高洁的黑翼·奥莉薇",
+    "cost": 9,
+    "type": 1,
+    "atk": 7,
+    "life": 7,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10814110": {
+    "name": "离合有终·赛德斯&梅希亚",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 6,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10824110": {
+    "name": "天命的子弹·巴妮&巴隆",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "if": {
+          "rally_gte": 20
+        },
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 4
+          }
+        ]
+      }
+    ]
+  },
+  "10824120": {
+    "name": "焦灼炎将·玛尔斯",
+    "cost": 8,
+    "type": 1,
+    "atk": 1,
+    "life": 5,
+    "static": {
+      "has_storm": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10832320": {
+    "name": "伏地雷击",
+    "cost": 5,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10833110": {
+    "name": "玛纳利亚文书官·琪可",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 2,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己使用玛纳利亚·法术时，对对手的主战者造成1点伤害。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10833310": {
+    "name": "钢铁的小憩",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10834110": {
+    "name": "恩爱的大地·坦忒拉&拉缇卡",
+    "cost": 6,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10842310": {
+    "name": "末世死化妆",
+    "cost": 6,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 4
+          }
+        ]
+      }
+    ]
+  },
+  "10843110": {
+    "name": "穹顶的战火·杰亚达",
+    "cost": 6,
+    "type": 1,
+    "atk": 6,
+    "life": 2,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10843310": {
+    "name": "狐火蜃景",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10851110": {
+    "name": "通透的信念·安瑟珠",
+    "cost": 4,
+    "type": 1,
+    "atk": 2,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10851120": {
+    "name": "可爱恶魔·莉莉姆",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10852310": {
+    "name": "启程的退场",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10854110": {
+    "name": "出发的憧憬·苇剑&武津御",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 5,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 4
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ],
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10861120": {
+    "name": "勤劳的女祭司·泰瑞莎",
+    "cost": 7,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10864110": {
+    "name": "飞跃的姐妹·贝尔迪俪亚&卡诗黛儿",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己的超进化后的随从攻击随从时，回合结束前，使其获得「1回合可以攻击2次」。",
+        "effects": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10864120": {
+    "name": "希望的光彩·莉迪耶尔",
+    "cost": 5,
+    "type": 1,
+    "atk": 2,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10873310": {
+    "name": "开辟未来",
+    "cost": 3,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10874110": {
+    "name": "决断的交错·亚修雷&莉缇雅",
+    "cost": 5,
+    "type": 1,
+    "atk": 5,
+    "life": 5,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10903110": {
+    "name": "无我看守",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_evolve": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10914110": {
+    "name": "烟管的罪人·曲千代",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10922120": {
+    "name": "凶猛指挥官",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "if": {
+          "enhance_cost": 7
+        },
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10924110": {
+    "name": "逆行的罪人·巴巴洛丝",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10924120": {
+    "name": "武皇的变貌·贝尔铁佐",
+    "cost": 10,
+    "type": 1,
+    "atk": 2,
+    "life": 12,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10931110": {
+    "name": "沉溺的实验体",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10931120": {
+    "name": "钥灵",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 4
+          }
+        ]
+      }
+    ]
+  },
+  "10934110": {
+    "name": "万术的罪人·赛菲",
+    "cost": 7,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己的『沉溺的实验体』进入战场时，自己的每回合中可触发1次，使其获得【疾驰】。",
+        "effects": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10941110": {
+    "name": "碎裂的盗匪",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10942110": {
+    "name": "绝倒的袭击者",
+    "cost": 2,
+    "type": 1,
+    "atk": 1,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10942120": {
+    "name": "龙人管家",
+    "cost": 8,
+    "type": 1,
+    "atk": 6,
+    "life": 9,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "recover_pp",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "10944110": {
+    "name": "穿孔的罪人·安缇马丽亚",
+    "cost": 7,
+    "type": 1,
+    "atk": 6,
+    "life": 5,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10951110": {
+    "name": "强袭的特攻队长",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10952120": {
+    "name": "闪烁恶魔",
+    "cost": 7,
+    "type": 1,
+    "atk": 7,
+    "life": 7,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "10952310": {
+    "name": "锁链相连",
+    "cost": 2,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10953110": {
+    "name": "激烈的副总长",
+    "cost": 6,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 3
+          }
+        ]
+      }
+    ],
+    "on_super_evolve": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "all_leaders",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10954120": {
+    "name": "伽罗塔德 对 泽特",
+    "cost": 8,
+    "type": 1,
+    "atk": 8,
+    "life": 8,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "10962120": {
+    "name": "奇迹独角兔",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "10964110": {
+    "name": "神纹的罪人·艾尔拉德",
+    "cost": 6,
+    "type": 1,
+    "atk": 6,
+    "life": 6,
+    "crest_rules": [
+      {
+        "raw_crest_text": "自己的回合结束时，若自己的战场上有原始费用为6或以上的卡牌，则对对手的主战者造成1点伤害。回复自己的主战者1点生命值。",
+        "effects": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10972120": {
+    "name": "刀线客",
+    "cost": 6,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "10973110": {
+    "name": "铸铁亲信",
+    "cost": 5,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "90004110": {
+    "name": "沉默的魔将",
+    "cost": 6,
+    "type": 1,
+    "atk": 10,
+    "life": 10,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90014110": {
+    "name": "冰晶剑士·伊芙",
+    "cost": 3,
+    "type": 1,
+    "atk": 3,
+    "life": 3,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90014310": {
+    "name": "蔷薇之闪击",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "90014320": {
+    "name": "绝命的痛击",
+    "cost": 6,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 6
+          }
+        ]
+      }
+    ]
+  },
+  "90021210": {
+    "name": "令人战栗的海盗旗",
+    "cost": 1,
+    "type": 2,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "90021310": {
+    "name": "黄金短剑",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "90023110": {
+    "name": "安静的女仆·诺嘉",
+    "cost": 2,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "buff_attack",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "90034320": {
+    "name": "伟大之术",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target_choice": [
+              "enemy_leader",
+              "enemy_follower"
+            ],
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "90034350": {
+    "name": "宏大的回归",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "set_max_attacks",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "90043110": {
+    "name": "乙姬近卫队",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90044330": {
+    "name": "天刀深渊",
+    "cost": 2,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      },
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  },
+  "90051130": {
+    "name": "怨灵",
+    "cost": 1,
+    "type": 1,
+    "atk": 1,
+    "life": 1,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90054110": {
+    "name": "守卫犬的右腕·米米",
+    "cost": 1,
+    "type": 1,
+    "atk": 2,
+    "life": 1,
+    "static": {
+      "has_rush": true
+    },
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "90054320": {
+    "name": "爱绝的飞翔",
+    "cost": 0,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "gain_status",
+            "status": "storm"
+          }
+        ]
+      }
+    ]
+  },
+  "90061110": {
+    "name": "神圣猎鹰",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90061130": {
+    "name": "壮丽大神隼",
+    "cost": 6,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90064320": {
+    "name": "天书深渊",
+    "cost": 1,
+    "type": 3,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 2
+          }
+        ]
+      }
+    ]
+  },
+  "90071160": {
+    "name": "绚烂的创造物",
+    "cost": 3,
+    "type": 1,
+    "atk": 2,
+    "life": 2,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90073120": {
+    "name": "毁灭创造物β",
+    "cost": 5,
+    "type": 1,
+    "atk": 4,
+    "life": 4,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 3
+          }
+        ]
+      }
+    ]
+  },
+  "90074110": {
+    "name": "卓越创造物Ω",
+    "cost": 10,
+    "type": 1,
+    "atk": 10,
+    "life": 10,
+    "static": {
+      "has_storm": true
+    }
+  },
+  "90074220": {
+    "name": "新约·黑之章",
+    "cost": 3,
+    "type": 2,
+    "atk": 0,
+    "life": 0,
+    "on_play": [
+      {
+        "do": [
+          {
+            "op": "deal_damage",
+            "target": "enemy_leader",
+            "amount": 1
+          }
+        ]
+      }
+    ]
+  }
+}

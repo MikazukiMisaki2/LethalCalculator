@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "catalog_version": 1,
+  "game_version": "fixture-v2.1",
+  "rules": {
+    "10413110": {
+      "card_id": 10413110,
+      "support": "generated",
+      "source_hash": "fixture-cupitan",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 4,
+          "abilities": [
+            {
+              "trigger": "on_fanfare",
+              "condition": {"state": "skybound_art", "cmp": "gte", "value": 1},
+              "effects": [
+                {"op": "auto_evolve", "target": {"scope": "self"}, "evolution_kind": "normal"}
+              ]
+            },
+            {
+              "trigger": "on_fanfare",
+              "condition": {"state": "super_skybound_art", "cmp": "gte", "value": 1},
+              "effects": [
+                {"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 3}
+              ]
+            },
+            {
+              "trigger": "on_evolve",
+              "effects": [
+                {
+                  "op": "repeat",
+                  "count": 7,
+                  "effects": [
+                    {"op": "damage", "target": {"scope": "enemy_follower", "selection": "random", "count": 1}, "amount": 1}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "10753310": {
+      "card_id": 10753310,
+      "support": "generated",
+      "source_hash": "fixture-night-song",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 3,
+          "abilities": [
+            {
+              "trigger": "on_play",
+              "effects": [
+                {"op": "damage", "target": {"scope": "enemy_follower", "selection": "all", "allocation": "ordered_split"}, "amount": 6},
+                {
+                  "op": "conditional",
+                  "condition": {"state": "cemetery", "cmp": "gte", "value": 6},
+                  "effects": [
+                    {"op": "consume_resource", "resource": "cemetery", "amount": 6},
+                    {"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 2}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "99900001": {
+      "card_id": 99900001,
+      "support": "partial",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 1,
+          "abilities": [
+            {
+              "trigger": "on_play",
+              "effects": [
+                {
+                  "op": "random_choice",
+                  "choices": [
+                    {"weight": 1, "effects": [{"op": "draw", "count": 1}]},
+                    {"weight": 1, "effects": [{"op": "recover_pp", "amount": 1}]}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "unparsed_clauses": ["fixture-only unsupported tail"]
+    }
+  }
+}

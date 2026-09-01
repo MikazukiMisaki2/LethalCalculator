@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "shadowverse-wb://schemas/card-catalog-1.json",
+  "title": "Shadowverse WB CardCatalog",
+  "type": "object",
+  "required": ["schema_version", "type_map", "cards"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "game_version": {"type": "string"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cards_json_sha256": {"type": "string"},
+        "effects_json_sha256": {"type": "string"},
+        "crawler_chs_sha256": {"type": "string"},
+        "crawler_en_sha256": {"type": "string"},
+        "structured_cards_sha256": {"type": "string"},
+        "generated_at": {"type": "string"},
+        "source_url": {"type": "string"}
+      }
+    },
+    "type_map": {
+      "type": "object",
+      "required": ["follower", "amulet", "countdown_amulet", "spell"],
+      "additionalProperties": false,
+      "properties": {
+        "follower": {"const": 1},
+        "amulet": {"type": "integer"},
+        "countdown_amulet": {"type": "integer"},
+        "spell": {"type": "integer"}
+      }
+    },
+    "cards": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {"$ref": "#/$defs/card"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "card": {
+      "type": "object",
+      "required": ["card_id", "base_card_id", "name", "type", "cost", "stats", "sources"],
+      "additionalProperties": false,
+      "properties": {
+        "card_id": {"type": "integer"},
+        "base_card_id": {"type": "integer"},
+        "name": {
+          "type": "object",
+          "required": ["chs", "eng"],
+          "additionalProperties": false,
+          "properties": {
+            "chs": {"type": "string"},
+            "eng": {"type": "string"}
+          }
+        },
+        "names": {"type": "object", "additionalProperties": {"type": "string"}},
+        "type": {"enum": ["follower", "amulet", "countdown_amulet", "spell", "unknown"]},
+        "raw_type": {"type": "integer"},
+        "cost": {"type": "integer", "minimum": 0},
+        "stats": {
+          "type": "object",
+          "required": ["attack", "life"],
+          "additionalProperties": false,
+          "properties": {
+            "attack": {"type": "integer", "minimum": 0},
+            "life": {"type": "integer", "minimum": 0},
+            "evolved_attack": {"type": "integer", "minimum": 0},
+            "evolved_life": {"type": "integer", "minimum": 0}
+          }
+        },
+        "class_id": {"type": "integer"},
+        "tribes": {"type": "array", "items": {"type": "integer"}},
+        "evolves_to": {"type": ["integer", "null"]},
+        "is_token": {"type": "boolean"},
+        "related_card_ids": {"type": "array", "items": {"type": "integer"}},
+        "specific_effect_card_ids": {"type": "array", "items": {"type": "integer"}},
+        "skill_refs": {"type": "array", "items": {"type": "object"}},
+        "text": {
+          "type": "object",
+          "required": ["skill_texts"],
+          "additionalProperties": false,
+          "properties": {
+            "skill_texts": {"type": "array", "items": {"$ref": "#/$defs/text_entry"}}
+          }
+        },
+        "alt_modes": {"type": "array", "items": {"$ref": "#/$defs/alt_mode"}},
+        "sources": {
+          "type": "object",
+          "required": ["cards_json"],
+          "additionalProperties": false,
+          "properties": {
+            "cards_json": {"type": "boolean"},
+            "effects_json": {"type": "boolean"},
+            "crawler_chs": {"type": "boolean"},
+            "crawler_en": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "alt_mode": {
+      "type": "object",
+      "required": ["type_key", "cost", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type_key": {"enum": ["faith", "crest", "crystallize", "accelerate", "mode", "unknown"]},
+        "type": {"type": "string"},
+        "cost": {"type": "integer", "minimum": 0},
+        "text": {
+          "type": "object",
+          "required": ["chs", "eng"],
+          "additionalProperties": false,
+          "properties": {
+            "chs": {"type": "string"},
+            "eng": {"type": "string"}
+          }
+        },
+        "dedupe_key": {"type": "string"}
+      }
+    },
+    "text_entry": {
+      "type": "object",
+      "required": ["key", "chs", "eng"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"type": "string"},
+        "chs": {"type": "string"},
+        "eng": {"type": "string"},
+        "source_keys": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "root": {
+    "is_ally_turn": true,
+    "players": [
+      {
+        "life": 20,
+        "deck_count": 25,
+        "pp": 5,
+        "max_pp": 5,
+        "evolve_points": 1,
+        "super_evolve_points": 0,
+        "cemetery_count": 3,
+        "rally": 8,
+        "is_awakening": false,
+        "play_count": 2,
+        "hand": [{"unique_id": 101, "card_id": 10021110, "cost": 1, "attack": 1, "life": 1, "card_type": 1}],
+        "field": [{"unique_id": 201, "card_id": 10021110, "attack": 2, "life": 2, "has_guard": false, "evolve_state": 0, "has_attacked": false, "attack_limit": 1, "can_attack_leader": true, "can_attack_field": true}],
+        "crests": [{"card_id": 10364122, "unique_id": 301, "countdown": 3, "faith_value": 7, "variable_x": 0, "supplement_info": {"faith": 7}}],
+        "extra_crests": []
+      },
+      {"life": 6, "deck_count": 20, "pp": 4, "max_pp": 4, "hand": [], "field": [{"unique_id": 401, "card_id": 10001130, "attack": 3, "life": 4, "has_guard": true, "evolve_state": 0, "has_attacked": false, "attack_limit": 1}]}
+    ]
+  },
+  "legal_actions": {
+    "can_play_cards": [101],
+    "can_play_cards_with_extra_pp": [],
+    "can_enhance_play_cards": [],
+    "can_accelerate_play_cards": [],
+    "can_crystal_play_cards": [],
+    "can_attack_leader_cards": [],
+    "can_attack_field_cards": [201],
+    "attacked_cards": [],
+    "can_evolve_cards": [201],
+    "can_super_evolve_cards": [],
+    "attack_targets": {"201": [401]}
+  }
+}
