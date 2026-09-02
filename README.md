@@ -28,6 +28,7 @@ A one-turn-kill (lethal) solver for *Shadowverse Worlds Beyond*. Given a board /
 | `lethal_models.py` | 核心数据结构（随从/手牌/状态/结果） |
 | `lethal_ui_simulator.py` | tkinter 桌面斩杀模拟器 |
 | `snapshot_adapter.py` | 将外部快照（Tracker）映射为求解器状态 |
+| `tracker_integration.py` | Tracker 实时刷新、合法行动/目标投影与状态视图 |
 
 ## 快速开始
 
@@ -50,10 +51,11 @@ python clean_cards.py          # 生成 data/generated/card_catalog.json
 python compile_card_rules.py   # 生成 data/generated/card_rules_generated.json
 python merge_card_rules.py     # 合并人工覆盖 -> data/generated/card_rules_v2.json + coverage report
 python validate_contract.py    # Step 7：Schema、引用词汇、逐卡覆盖完整门禁
+python validate_schemas.py --tracker fixtures/tracker_snapshots/complete.json  # Step 8 快照 Schema
 ```
 
 人工覆盖规则的使用规范见 `docs/manual_overrides.md`。
 
 ## 测试
 
-项目自带单元测试（`test_*.py`），覆盖：斩杀引擎示例路线、事件解释器、快照适配、文本归一化、规则 schema 校验、Step 7 合同门禁等，共 146 项。
+项目自带单元测试（`test_*.py`），覆盖：斩杀引擎示例路线、事件解释器、快照适配、Tracker 合同与刷新会话、文本归一化、规则 schema 校验、Step 7 合同门禁等，共 211 项。

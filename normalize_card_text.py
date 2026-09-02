@@ -19,6 +19,7 @@ BOUNDARY_RE = re.compile(r"<(?P<open>ev|sev)>|</(?P<close>ev|sev)>|<hr\s*/?>", r
 UNKNOWN_TAG_RE = re.compile(r"</?([a-zA-Z][\w-]*)(?:\s[^>]*)?>")
 TRIGGER_PATTERNS = [
     ("on_fanfare", re.compile(r"fanfare|入场曲|出击" , re.I)),
+    ("on_invoke", re.compile(r"when\s+(?:this\s+)?(?:card|follower)\s+is\s+invoked|被?瞬念召唤", re.I)),
     ("on_draw", re.compile(r"when\s+you\s+draw\s+this\s+card|when\s+this\s+card\s+is\s+drawn|抽到.*这张卡", re.I)),
     ("on_discard", re.compile(r"when\s+this\s+card\s+is\s+discarded|discarded\s*[:：]|舍弃.*这张卡", re.I)),
     ("on_ally_follower_super_evolve", re.compile(r"(?:whenever|when) an allied follower super-?evolves?|自己的随从超进化时", re.I)),
@@ -99,6 +100,7 @@ def trigger_for(clause: str) -> str:
         ("on_super_evolve", r"(?:super[- ]?evolve|超进化时)\s*(?:\([^)]*\))?\s*[:：]"),
         ("on_evolve", r"(?:evolve|进化时)\s*(?:\([^)]*\))?\s*[:：]"),
         ("on_engage", r"(?:engage|激奏|激活|启动)\s*(?:\([^)]*\))?\s*[:：]?"),
+        ("on_invoke", r"(?:when\s+(?:this\s+)?(?:card|follower)\s+is\s+invoked|被?瞬念召唤)\s*[,：:]"),
         ("on_fanfare", r"(?:fanfare|入场曲|出击)\s*[:：]"),
     )
     for trigger, pattern in explicit_prefixes:

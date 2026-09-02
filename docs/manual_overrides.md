@@ -13,3 +13,8 @@ represent a complex card.
 The merge rejects missing cards, stale hashes, non-verified overrides, schema
 errors, and verified rules that depend on planned operations. Unsupported parts
 must remain `partial`; do not omit them merely to obtain `verified` status.
+
+The current override includes Baal, Elemental Resonance (`10452130`): Mode 1
+buffs Baal and one *other* allied follower chosen uniformly at random. Keep
+`exclude_source=true` on that selector so the newly played Baal is not chosen
+again as the second target.

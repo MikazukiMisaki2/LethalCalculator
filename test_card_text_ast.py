@@ -532,6 +532,28 @@ class CardTextAstTests(unittest.TestCase):
         evolve = next(effect for effect in gated["effects"] if effect["kind"] == "auto_evolve")
         self.assertEqual(evolve["target"]["scope"], "trigger_source")
 
+    def test_remove_keyword_keeps_previous_target_relation(self):
+        node = clause_to_ast({
+            "language": "eng",
+            "plain": "Engage: Select an enemy follower and remove Ward from it.",
+            "trigger": "on_engage",
+            "structure": {},
+        })
+        remove = next(effect for effect in node["effects"] if effect["kind"] == "remove_keyword")
+        self.assertEqual(remove["keyword"], "ward")
+        self.assertEqual(remove["target"]["scope"], "previous_target")
+        self.assertFalse(any(effect.get("kind") == "grant_keyword" for effect in node["effects"]))
+
+    def test_static_drain_is_materialized_as_a_keyword(self):
+        node = clause_to_ast({
+            "language": "eng",
+            "plain": "Drain",
+            "trigger": "static",
+            "structure": {},
+        })
+        self.assertIn("drain", node["static_keywords"])
+        self.assertTrue(any(effect.get("kind") == "grant_keyword" and effect.get("keyword") == "drain" for effect in node["effects"]))
+
     def test_fusion_and_invoke_are_structured(self):
         fusion = clause_to_ast({"language": "eng", "plain": "Fuse: Loot cards", "trigger": "static", "structure": {}})
         self.assertEqual(fusion["effects"][0]["kind"], "fusion_config")
@@ -539,6 +561,24 @@ class CardTextAstTests(unittest.TestCase):
         invoke = clause_to_ast({"language": "eng", "plain": "At the start of your turn, if allied followers have evolved at least 6 times this match, invoke this card.", "trigger": "on_turn_start", "structure": {}})
         self.assertEqual(invoke["conditions"][0]["state"], "evolved_allies_this_match")
         self.assertIn("invoke", [effect["kind"] for effect in invoke["effects"]])
+
+    def test_invoke_and_fanfare_are_separate_virtual_triggers(self):
+        pieces = split_mode_clauses({
+            "language": "eng",
+            "source_key": "skill",
+            "index": 0,
+            "plain": "When this card is Invoked, deal 1 damage to the enemy leader. Fanfare: Draw a card.",
+            "trigger": "on_fanfare",
+        })
+        self.assertEqual(pieces[0]["trigger"], "on_invoke")
+        self.assertEqual(pieces[1]["trigger"], "on_fanfare")
+        self.assertNotEqual(pieces[0]["virtual_index"], pieces[1]["virtual_index"])
+        invoke = clause_to_ast(pieces[0])
+        fanfare = clause_to_ast(pieces[1])
+        self.assertEqual(invoke["trigger"], "on_invoke")
+        self.assertEqual(fanfare["trigger"], "on_fanfare")
+        self.assertEqual(invoke["effects"][0]["kind"], "damage")
+        self.assertEqual(fanfare["effects"][0]["kind"], "draw")
 
     def test_progressive_sequence_keeps_step_order(self):
         node = clause_to_ast({"language": "eng", "plain": "At the end of your turn, activate an ability in sequence from the following. 1. Draw a card. 2. Deal 2 damage to the enemy leader.", "trigger": "on_turn_end", "structure": {}})

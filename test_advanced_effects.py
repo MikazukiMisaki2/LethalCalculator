@@ -320,8 +320,25 @@ class SnapshotHistoryTests(unittest.TestCase):
         self.assertTrue(result.state.destroyed_pool_exact)
         self.assertEqual([item.card_id for item in result.state.destroyed_this_match], [201, 201, 202])
         self.assertEqual((result.state.hand[0].spell_boost_count, result.state.hand[0].variable_x, result.state.hand[0].supplement_info), (4, 4, (("boost", 4),)))
+        self.assertEqual(result.state.hand[0].enhance_costs, ())
         self.assertEqual(result.state.hand[1].type, 4)
         self.assertEqual([item.unique_id for item in result.state.destroyed_this_match], [-1, -2, -3])
+
+    def test_adapter_keyword_mapping_ignores_disabled_flags(self):
+        catalog = {"cards": {
+            "101": {"card_id": 101, "name": {"eng": "Keywords"}, "type": "follower", "cost": 1, "stats": {"attack": 1, "life": 1}, "tribes": []},
+        }}
+        snapshot = {"root": {"is_ally_turn": True, "players": [
+            {"life": 10, "max_life": 10, "pp": 1, "max_pp": 1, "hand": [], "field": [
+                {"unique_id": 1, "card_id": 101, "attack": 1, "life": 1, "keywords": {"storm": True, "bane": False}}
+            ]},
+            {"life": 10, "max_life": 10, "hand": [], "field": []},
+        ]}, "legal_actions": {}}
+        result = SnapshotAdapter.adapt(snapshot, catalog=catalog)
+        follower = result.state.my_board[0]
+        self.assertIn("storm", follower.statuses)
+        self.assertNotIn("bane", follower.statuses)
+        self.assertFalse(follower.has_bane)
 
 
 if __name__ == "__main__":

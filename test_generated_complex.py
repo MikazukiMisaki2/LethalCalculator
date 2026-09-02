@@ -66,6 +66,33 @@ class GeneratedComplexRuleTests(unittest.TestCase):
                 break
         return result
 
+    def test_pirate_flag_advances_when_a_spell_is_played(self):
+        """Countdown flags advance on each spell, not on arbitrary cards."""
+        flag = LethalFollower(3, 90021210, "Dread Pirate's Flag", 0, 0, countdown=3)
+        spell = LethalHandCard(5, 99999999, "Test Spell", 1, 4)
+        state = LethalState(
+            enemy_hp=10, pp=3, max_pp=3, ep=0, sep=0,
+            hand=[spell], my_board=[flag], destroyed_pool_known=True,
+        )
+        result = EventInterpreter(self.rules, catalog=self.catalog, card_db={spell.card_id: spell}).play(state, spell.unique_id)
+        self.assertEqual(result.state.my_board[0].countdown, 2)
+
+    def test_barbaros_advances_all_existing_and_new_flags(self):
+        flags = [
+            LethalFollower(3, 90021210, "Dread Pirate's Flag", 0, 0, countdown=6),
+            LethalFollower(4, 90021210, "Dread Pirate's Flag", 0, 0, countdown=4),
+        ]
+        barbaros = self.make_card(10924110, 5)
+        state = LethalState(
+            enemy_hp=10, pp=10, max_pp=10, ep=0, sep=0,
+            hand=[barbaros], my_board=flags, destroyed_pool_known=True,
+        )
+        result = EventInterpreter(self.rules, catalog=self.catalog, card_db={barbaros.card_id: barbaros}).play(state, barbaros.unique_id)
+        self.assertEqual(
+            [item.countdown for item in result.state.my_board if item.card_id == 90021210],
+            [1, 2],
+        )
+
     def test_cupitan_repeat_random_recomputes_pool(self):
         card = self.make_card(10413110, 1000)
         enemies = [LethalFollower(i, 900 + i, f"enemy-{i}", 1, 3) for i in range(1, 4)]

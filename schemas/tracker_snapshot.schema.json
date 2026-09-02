@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "shadowverse-wb://schemas/tracker-snapshot-1.json",
+  "title": "ShadowverseTracker public battle snapshot",
+  "description": "Version-tolerant boundary schema. Completeness and trust are checked by SnapshotAdapter.",
+  "type": "object",
+  "required": ["root"],
+  "properties": {
+    "schema_version": {"type": ["integer", "string"]},
+    "snapshot_version": {"type": ["integer", "string"]},
+    "address": {"type": "string"},
+    "current_turn": {"type": "integer"},
+    "root": {"$ref": "#/$defs/root"},
+    "legal_actions": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/legal_actions"}
+      ]
+    },
+    "events": {"type": "array"},
+    "deck_ledger": {"type": ["object", "null"]},
+    "opponent_hand_knowledge": {"type": ["object", "null"]},
+    "training_observation": {"type": ["object", "null"]}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "integer": {"type": "integer"},
+    "integer_or_null": {"type": ["integer", "null"]},
+    "integer_array": {
+      "type": "array",
+      "items": {"type": "integer"}
+    },
+    "target_array": {
+      "type": "array",
+      "items": {"type": ["integer", "string"]}
+    },
+    "root": {
+      "type": "object",
+      "required": ["is_ally_turn", "players"],
+      "properties": {
+        "address": {"type": "string"},
+        "is_ally_turn": {"type": "boolean"},
+        "players": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/player"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "player": {
+      "type": "object",
+      "properties": {
+        "address": {"type": "string"},
+        "unique_id": {"type": "integer"},
+        "deck_count": {"type": "integer", "minimum": 0},
+        "life": {"type": "integer"},
+        "max_life": {"type": "integer"},
+        "pp": {"type": "integer", "minimum": 0},
+        "max_pp": {"type": "integer", "minimum": 0},
+        "turn": {"type": "integer", "minimum": 0},
+        "evolve_points": {"type": "integer", "minimum": 0},
+        "super_evolve_points": {"type": "integer", "minimum": 0},
+        "extra_pp": {"type": "integer", "minimum": 0},
+        "preparation_extra_pp": {"type": "integer", "minimum": 0},
+        "cemetery_count": {"type": "integer", "minimum": 0},
+        "rally": {"type": "integer", "minimum": 0},
+        "evolve_turn": {"type": "integer", "minimum": 0},
+        "super_evolve_turn": {"type": "integer", "minimum": 0},
+        "play_count": {"type": "integer", "minimum": 0},
+        "is_awakening": {"type": "boolean"},
+        "remaining_pp_until_awakening": {"type": "integer", "minimum": 0},
+        "is_evolved_this_turn": {"type": "boolean"},
+        "evolve_count": {"type": "integer", "minimum": 0},
+        "manual_evolve_count": {"type": "integer", "minimum": 0},
+        "is_used_extra_pp_this_turn": {"type": "boolean"},
+        "cant_fanfare_and_enhance_ally_follower": {"type": "boolean"},
+        "buff": {"$ref": "#/$defs/player_buff"},
+        "hand": {"type": "array", "items": {"$ref": "#/$defs/hand_entry"}},
+        "field": {"type": "array", "items": {"$ref": "#/$defs/field_card"}},
+        "played_card_ids": {"type": "array"},
+        "destroyed_card_ids": {"type": "array"},
+        "faith": {"$ref": "#/$defs/resource_value"},
+        "faith_value": {"type": "integer", "minimum": 0},
+        "faith_instances": {"type": "array", "items": {"$ref": "#/$defs/faith_instance"}},
+        "faith_resources": {"type": ["array", "object", "null"]},
+        "crests": {"type": "array", "items": {"$ref": "#/$defs/crest"}},
+        "extra_crests": {"type": "array", "items": {"$ref": "#/$defs/crest"}},
+        "earth_sigil": {"type": "integer", "minimum": 0},
+        "earth_rite": {"type": "integer", "minimum": 0},
+        "skybound_art": {"type": "integer", "minimum": 0},
+        "super_skybound_art": {"type": "integer", "minimum": 0},
+        "destroyed_this_match": {"type": "array"},
+        "destroyed_history": {"type": "array"}
+      },
+      "additionalProperties": true
+    },
+    "resource_value": {
+      "oneOf": [
+        {"type": "integer"},
+        {"type": "object", "additionalProperties": true}
+      ]
+    },
+    "player_buff": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "properties": {
+            "sources": {"type": "array"},
+            "max_life": {"type": "integer"},
+            "temp_shield": {"type": "boolean"},
+            "damage_cut": {"type": "integer"},
+            "increase_damage": {"type": "integer"}
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "faith_instance": {
+      "type": "object",
+      "properties": {
+        "source_card_id": {"type": "integer"},
+        "card_id": {"type": "integer"},
+        "unique_id": {"type": "integer"},
+        "value": {"type": "integer"},
+        "faith_value": {"type": "integer"},
+        "initial_value": {"type": "integer"},
+        "mode_limit_bonus": {"type": "integer"},
+        "abilities": {"type": "array"}
+      },
+      "additionalProperties": true
+    },
+    "crest": {
+      "type": "object",
+      "properties": {
+        "card_id": {"type": "integer"},
+        "unique_id": {"type": "integer"},
+        "style_id": {"type": "integer"},
+        "countdown": {"type": "integer"},
+        "faith_value": {"type": "integer"},
+        "variable_x": {"type": "integer"},
+        "supplement_info": {"type": "object"},
+        "buff": {"type": ["object", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "hand_card": {
+      "type": "object",
+      "required": ["unique_id", "card_id"],
+      "properties": {
+        "unique_id": {"type": "integer"},
+        "card_id": {"type": "integer"},
+        "base_card_id": {"type": "integer"},
+        "cost": {"type": "integer", "minimum": 0},
+        "attack": {"type": "integer"},
+        "life": {"type": "integer"},
+        "card_type": {"type": "integer"},
+        "enhance_costs": {"$ref": "#/$defs/integer_array"},
+        "accelerate_costs": {"$ref": "#/$defs/integer_array"},
+        "crystal_costs": {"$ref": "#/$defs/integer_array"},
+        "tribes": {"$ref": "#/$defs/integer_array"},
+        "spell_boost_count": {"type": "integer", "minimum": 0},
+        "has_spell_boost": {"type": "boolean"},
+        "variable_x": {"type": "integer"},
+        "supplement_info": {"type": "object"},
+        "buff": {"type": ["object", "null"]},
+        "keywords": {"oneOf": [{"type": "array"}, {"type": "object"}]},
+        "statuses": {"oneOf": [{"type": "array"}, {"type": "object"}]
+        }
+      },
+      "additionalProperties": true
+    },
+    "hand_entry": {
+      "oneOf": [
+        {"$ref": "#/$defs/hand_card"},
+        {
+          "type": "object",
+          "required": ["hidden"],
+          "properties": {"hidden": {"const": true}},
+          "additionalProperties": true
+        }
+      ]
+    },
+    "field_card": {
+      "type": "object",
+      "required": ["unique_id", "card_id"],
+      "properties": {
+        "unique_id": {"type": "integer"},
+        "card_id": {"type": "integer"},
+        "cost": {"type": "integer", "minimum": 0},
+        "attack": {"type": "integer"},
+        "life": {"type": "integer"},
+        "max_life": {"type": "integer"},
+        "card_type": {"type": "integer"},
+        "attack_targets": {"$ref": "#/$defs/target_array"},
+        "AttackTargets": {"$ref": "#/$defs/target_array"},
+        "countdown": {"type": "integer"},
+        "evolve_state": {"type": "integer", "minimum": 0},
+        "attack_limit": {"type": "integer", "minimum": 0},
+        "has_guard": {"type": "boolean"},
+        "has_drain": {"type": "boolean"},
+        "has_sneak": {"type": "boolean"},
+        "has_killer": {"type": "boolean"},
+        "has_cant_be_attacked": {"type": "boolean"},
+        "has_cant_select": {"type": "boolean"},
+        "has_cant_attack": {"type": "boolean"},
+        "has_last_word": {"type": "boolean"},
+        "is_earth_sigil": {"type": "boolean"},
+        "has_spell_boost": {"type": "boolean"},
+        "enhanced_cost": {"type": "integer"},
+        "has_damage_cut": {"type": "boolean"},
+        "has_induction": {"type": "boolean"},
+        "has_activation": {"type": "boolean"},
+        "has_reduce_damage": {"type": "boolean"},
+        "has_cant_destroy": {"type": "boolean"},
+        "has_super_evolve_buff": {"type": "boolean"},
+        "can_attack_leader": {"type": "boolean"},
+        "can_attack_field": {"type": "boolean"},
+        "has_attacked": {"type": "boolean"},
+        "is_evolved": {"type": "boolean"},
+        "is_super_evolved": {"type": "boolean"},
+        "abilities_removed": {"type": "boolean"},
+        "has_no_abilities": {"type": "boolean"},
+        "buff": {"type": ["object", "null"]},
+        "supplement_info": {"type": "object"},
+        "keywords": {"oneOf": [{"type": "array"}, {"type": "object"}]},
+        "statuses": {"oneOf": [{"type": "array"}, {"type": "object"}]
+        }
+      },
+      "additionalProperties": true
+    },
+    "legal_actions": {
+      "type": "object",
+      "properties": {
+        "can_play_cards": {"$ref": "#/$defs/integer_array"},
+        "can_play_cards_with_extra_pp": {"$ref": "#/$defs/integer_array"},
+        "can_enhance_play_cards": {"$ref": "#/$defs/integer_array"},
+        "can_accelerate_play_cards": {"$ref": "#/$defs/integer_array"},
+        "can_crystal_play_cards": {"$ref": "#/$defs/integer_array"},
+        "can_attack_leader_cards": {"$ref": "#/$defs/integer_array"},
+        "can_attack_field_cards": {"$ref": "#/$defs/integer_array"},
+        "attacked_cards": {"$ref": "#/$defs/integer_array"},
+        "can_evolve_cards": {"$ref": "#/$defs/integer_array"},
+        "can_super_evolve_cards": {"$ref": "#/$defs/integer_array"},
+        "can_super_evolve_with_skill_cards": {"$ref": "#/$defs/integer_array"},
+        "can_activation_field_cards": {"$ref": "#/$defs/integer_array"},
+        "can_activation_field_cards_with_extra_pp": {"$ref": "#/$defs/integer_array"},
+        "has_activation_field_cards": {"$ref": "#/$defs/integer_array"},
+        "can_fusion_cards": {"$ref": "#/$defs/integer_array"},
+        "has_fusion_hand_cards": {"$ref": "#/$defs/integer_array"},
+        "can_special_action_field_cards": {"$ref": "#/$defs/integer_array"},
+        "can_special_action_area_cards": {"$ref": "#/$defs/integer_array"},
+        "attack_targets": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/target_array"}
+        },
+        "AttackTargets": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/target_array"}
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

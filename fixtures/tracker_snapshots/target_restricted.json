@@ -1,0 +1,58 @@
+{
+  "root": {
+    "is_ally_turn": true,
+    "players": [
+      {
+        "unique_id": 1000,
+        "life": 20,
+        "max_life": 20,
+        "pp": 2,
+        "max_pp": 2,
+        "evolve_points": 0,
+        "super_evolve_points": 0,
+        "cemetery_count": 0,
+        "rally": 0,
+        "play_count": 0,
+        "is_awakening": false,
+        "hand": [],
+        "field": [
+          {
+            "unique_id": 200,
+            "card_id": 10021110,
+            "attack": 4,
+            "life": 4,
+            "attack_limit": 1,
+            "has_guard": false,
+            "has_storm": true,
+            "attack_targets": [300]
+          }
+        ],
+        "crests": [],
+        "extra_crests": [],
+        "destroyed_card_ids": []
+      },
+      {
+        "unique_id": 999,
+        "life": 6,
+        "max_life": 6,
+        "hand": [],
+        "field": [
+          {"unique_id": 300, "card_id": 10001130, "attack": 3, "life": 3, "has_guard": false}
+        ]
+      }
+    ]
+  },
+  "legal_actions": {
+    "can_play_cards": [],
+    "can_play_cards_with_extra_pp": [],
+    "can_enhance_play_cards": [],
+    "can_accelerate_play_cards": [],
+    "can_crystal_play_cards": [],
+    "can_attack_leader_cards": [],
+    "can_attack_field_cards": [200],
+    "attacked_cards": [],
+    "can_evolve_cards": [],
+    "can_super_evolve_cards": [],
+    "attack_targets": {"200": [300]}
+  }
+}

@@ -53,9 +53,9 @@ class CardRulesSchemaTests(unittest.TestCase):
 
     def test_verified_rules_cannot_use_planned_operations(self):
         matrix = json.loads((ROOT / "schemas" / "card_rules_v2_support.json").read_text(encoding="utf-8"))
-        # Reanimate is now implemented for a public destroyed pool.  Keep the
-        # matrix guard exercised with an operation that is still planned.
-        invalid = {"schema_version": 2, "catalog_version": 1, "rules": {"1": {"card_id": 1, "support": "verified", "modes": [{"kind": "normal", "cost": 1, "abilities": [{"trigger": "on_play", "effects": [{"op": "invoke", "target": {"scope": "self"}}]}]}]}}}
+        # Keep the matrix guard exercised with a keyword that remains
+        # intentionally planned (Invoke/Add-to-zone are runtime-supported).
+        invalid = {"schema_version": 2, "catalog_version": 1, "rules": {"1": {"card_id": 1, "support": "verified", "modes": [{"kind": "normal", "cost": 1, "abilities": [{"trigger": "on_play", "effects": [{"op": "grant_keyword", "keyword": "aura", "target": {"scope": "self"}}]}]}]}}}
         self.assertTrue(validate_support(invalid, matrix))
 
 

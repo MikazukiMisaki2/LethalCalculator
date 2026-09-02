@@ -41,6 +41,34 @@ def split_mode_clauses(clause: dict[str, Any]) -> list[dict[str, Any]]:
     source key/index for bilingual pairing and auditability.
     """
     text = clause.get("plain", "")
+    # ``When this card is Invoked, ... Fanfare: ...`` contains two different
+    # event triggers in one normalized sentence. Split the invocation part
+    # before processing Enhance/Skybound markers so the runtime will not fire
+    # the Invoke-only effect on an ordinary hand play. ``virtual_index`` is
+    # separate from the source index: card_to_ast uses it to keep the two
+    # virtual abilities distinct while retaining the original provenance.
+    invoke_fanfare = re.search(
+        r"(?i)(?:when\s+(?:this\s+)?(?:card|follower)\s+is\s+invoked|被?瞬念召唤)[^.;]*?[.;]?\s*"
+        r"fanfare\s*[:：]",
+        text,
+    )
+    if invoke_fanfare:
+        boundary = re.search(r"(?i)fanfare\s*[:：]", text[invoke_fanfare.start():])
+        if boundary:
+            fanfare_start = invoke_fanfare.start() + boundary.start()
+            invoke_text = text[:fanfare_start].strip(" \t\r\n.;；。")
+            fanfare_text = text[fanfare_start:].strip()
+            if invoke_text and fanfare_text:
+                invoke_piece = dict(clause)
+                invoke_piece["plain"] = invoke_text
+                invoke_piece["trigger"] = "on_invoke"
+                invoke_piece["mode_override"] = None
+                invoke_piece["virtual_index"] = f"{clause.get('index', 0)}:invoke"
+                fanfare_piece = dict(clause)
+                fanfare_piece["plain"] = fanfare_text
+                fanfare_piece["trigger"] = "on_fanfare"
+                fanfare_piece["virtual_index"] = f"{clause.get('index', 0)}:fanfare"
+                return [invoke_piece, *split_mode_clauses(fanfare_piece)]
     marker = re.compile(
         r"(?P<special>super[- ]?skybound\s+art|skybound\s+art)\s*[-:：]\s*"
         r"|(?P<label>enhance|accelerate|crystallize)\s*\(\s*(?P<cost>\d+)\s*\)\s*:\s*"
@@ -419,6 +447,8 @@ def _resource_gated_clause_to_ast(clause: dict[str, Any], split: tuple[str, str,
     node["source_language"] = clause.get("language", "")
     node["source_key"] = clause.get("source_key", "")
     node["index"] = clause.get("index", 0)
+    if clause.get("virtual_index") is not None:
+        node["virtual_index"] = clause.get("virtual_index")
     node["section"] = clause.get("section", "normal")
     node["trigger"] = clause.get("trigger", "static")
     node["mode"] = clause.get("mode_override", _mode(clause.get("plain", "")))
@@ -432,6 +462,11 @@ def _resource_gated_clause_to_ast(clause: dict[str, Any], split: tuple[str, str,
 def _is_destroy_action(text: str) -> bool:
     """Recognize an instruction to destroy, not a historical/conditional mention."""
     value = text.strip()
+    # “Can't be destroyed by abilities” is a protection keyword, not a
+    # destroy instruction.  Matching the word ``destroyed`` here used to
+    # create a spurious Clash-like destroy effect on Armes.
+    if re.search(r"can't\s+be\s+destroyed|cannot\s+be\s+destroyed|不会被能力破坏", value, re.I):
+        return False
     patterns = (
         r"\bdestroy\s+(?:this card|it|that card|the selected|the opposing follower|an? |all |\d+ )",
         r"\b(?:select|choose)\b[^.]*\b(?:and\s+)?destroy\b",
@@ -846,7 +881,7 @@ def _repeat(text: str) -> int | str | None:
 
 def _mode(text: str) -> str | None:
     value = text.lower()
-    if "select a mode" in value or re.search(
+    if re.search(r"select\s+(?:\d+|a|an?)\s+modes?\b", value) or "select a mode" in value or re.search(
         r"(?:^|[【\s])模式[】\s]*(?:选择|发动)|(?:选择|发动)\s*(?:\d+|一个|1个)?\s*(?:模式|能力)",
         text,
         re.I,
@@ -971,7 +1006,17 @@ def _normalize_last_words_effects(effects: list[dict[str, Any]]) -> list[dict[st
 def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     text = clause.get("plain", "")
     resource_split_depth = int(clause.get("_resource_split_depth", 0) or 0)
-    if resource_split_depth < 8:
+    # The Earth Rite listener is itself the resource-gated clause; splitting
+    # it first would discard the event prefix and make it look partially
+    # parsed.  Let the explicit listener template below handle the whole
+    # sentence atomically.
+    is_golem_listener_text = re.fullmatch(
+        r"whenever\s+an?\s+allied\s+golem\s+follower\s+enters?\s+the\s+field\s*,?\s*"
+        r"earth\s+rite\s*\(\s*1\s*\)\s*[-–—:]\s*evolve\s+it\.?",
+        text.strip(),
+        re.I,
+    )
+    if resource_split_depth < 8 and not is_golem_listener_text:
         resource_split = _resource_gate_split(text)
         if resource_split is not None:
             return _resource_gated_clause_to_ast(clause, resource_split, resource_split_depth)
@@ -981,6 +1026,7 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         "source_language": clause.get("language", ""),
         "source_key": clause.get("source_key", ""),
         "index": clause.get("index", 0),
+        **({"virtual_index": clause.get("virtual_index")} if clause.get("virtual_index") is not None else {}),
         "section": clause.get("section", "normal"),
         "trigger": clause.get("trigger", "static"),
         "mode": clause.get("mode_override", _mode(text)),
@@ -994,6 +1040,29 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         "unparsed": [],
         "unparsed_clauses": [],
     }
+    # Global listener clauses can restrict the event entity (for example,
+    # “Whenever an allied Golem follower enters the field”).  Keep the
+    # filter alongside the trigger instead of mis-binding “it” to the
+    # listener source itself.
+    golem_summon_listener = re.fullmatch(
+        r"whenever\s+an?\s+allied\s+golem\s+follower\s+enters?\s+the\s+field\s*,?\s*"
+        r"earth\s+rite\s*\(\s*1\s*\)\s*[-–—:]\s*evolve\s+it\.?",
+        text.strip(),
+        re.I,
+    )
+    if golem_summon_listener:
+        node["trigger"] = "on_ally_follower_summon"
+        node["trigger_filter"] = {"card_type": "follower", "tribe": "golem"}
+        node["effects"] = [{
+            "kind": "conditional",
+            "condition": {"state": "earth_sigil", "cmp": "gte", "value": 1},
+            "effects": [
+                {"kind": "consume_resource", "resource": "earth_sigil", "amount": 1},
+                {"kind": "auto_evolve", "target": {"scope": "trigger_source"}, "evolution_kind": "normal"},
+            ],
+        }]
+        node["confidence"] = 1.0
+        return node
     engage_cost = re.search(r"engage\s*\((\d+)\)|费用\s*(\d+)\s*【启动】", text, re.I)
     if engage_cost:
         node["mode_cost"] = int(next(item for item in engage_cost.groups() if item))
@@ -1073,6 +1142,30 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     )
     if remove_abilities_match:
         node["effects"].append({"kind": "remove_abilities", "target": target or {"scope": "any"}})
+    # Explicit keyword removal is distinct from removing all abilities.  Keep
+    # the previous-target relation for sentences such as “select a follower
+    # and remove Ward from it”; the caller supplies that selected UID when the
+    # rule is executed.
+    remove_keyword_patterns = (
+        ("storm", r"(?:remove|lose|strip)\s+(?:the\s+)?storm\s+from|失去疾驰|移除疾驰"),
+        ("rush", r"(?:remove|lose|strip)\s+(?:the\s+)?rush\s+from|失去突进|移除突进"),
+        ("ward", r"(?:remove|lose|strip)\s+(?:the\s+)?ward\s+from|失去守护|移除守护"),
+        ("bane", r"(?:remove|lose|strip)\s+(?:the\s+)?bane\s+from|失去必杀|移除必杀"),
+        ("drain", r"(?:remove|lose|strip)\s+(?:the\s+)?drain\s+from|失去虹吸|移除虹吸"),
+        ("ambush", r"(?:remove|lose|strip)\s+(?:the\s+)?ambush\s+from|失去潜行|移除潜行"),
+    )
+    removed_keywords: set[str] = set()
+    for keyword, pattern in remove_keyword_patterns:
+        if not re.search(pattern, text, re.I):
+            continue
+        removed_keywords.add(keyword)
+        if re.search(r"\bfrom\s+(?:it|them|that follower|the selected follower)\b|使其|将其", text, re.I):
+            remove_target = {"scope": "previous_target", "selection": "chosen"}
+        elif re.search(r"\bfrom\s+(?:this|the)\s+(?:follower|amulet|card)\b|本(?:随从|护符|卡牌)", text, re.I):
+            remove_target = {"scope": "self"}
+        else:
+            remove_target = target or {"scope": "self"}
+        node["effects"].append({"kind": "remove_keyword", "keyword": keyword, "target": remove_target})
     # Deferred keyword abilities are kept as status nodes rather than being
     # mistaken for immediate effects.  The prefix before the quote contains
     # the actual recipient (for example, all allied Puppetry followers).
@@ -1170,7 +1263,21 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
             body = text[match.end():end].strip(" 。；;:")
             sub = clause_to_ast({**clause, "plain": body, "mode_override": None})
             choices.append({"label": match.group(1) or match.group(2), "effects": sub.get("effects", [])})
-        node["effects"].append({"kind": "mode_choice", "choices": choices})
+        # Keep the number selected as part of the effect.  Previously the
+        # parser emitted only the options, so the engine could not tell
+        # “Select 2 Modes” apart from the ordinary one-choice form and would
+        # either execute one option or flatten all options together.
+        selection_match = re.search(r"select\s+(\d+)\s+modes?\b|选择\s*(\d+)\s*个?模式", text, re.I)
+        selection_count = None
+        if selection_match:
+            raw_count = next((item for item in selection_match.groups() if item), None)
+            if raw_count:
+                selection_count = int(raw_count)
+        mode_effect: dict[str, Any] = {"kind": "mode_choice", "choices": choices}
+        if selection_count is not None and selection_count > 0:
+            mode_effect["selection_count"] = selection_count
+            node["mode_selection_count"] = selection_count
+        node["effects"].append(mode_effect)
         node["confidence"] = 1.0 if all(choice.get("effects") for choice in choices) else 0.0
         return node
     else:
@@ -1473,7 +1580,12 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
                 "effects": [{"kind": "destroy", "target": {"scope": "trigger_source"}}],
             }
         node["effects"].append(status_effect)
-        node["unparsed_clauses"].append(f"unsupported_nested:status:{status_body}")
+        # Keep a remainder marker only when the quoted body did not map to an
+        # executable nested ability.  The end-of-opponent-turn destroy body
+        # above is fully represented and must not downgrade an otherwise
+        # complete copy effect to ``partial``.
+        if "ability" not in status_effect:
+            node["unparsed_clauses"].append(f"unsupported_nested:status:{status_body}")
     if dynamic_summon and re.search(r"super-?evolve\s+(?:it|them)", immediate_text, re.I):
         node["effects"] = [
             item for item in node["effects"]
@@ -1603,10 +1715,13 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
             **({"cost_delta": -int(opponent_hand_copy.group("delta"))} if opponent_hand_copy.group("delta") else {}),
         })
         dynamic_hand_copy = True
-    draw_match = re.search(r"draw\s+(a|an|\d+|x)\s+(cards?|spells?|followers?|amulets?)|抽[取]?(\d+|X)张?(法术|随从|护符|卡牌)", immediate_text, re.I)
+    draw_match = re.search(r"draw\s+(a|an|\d+|x)\s+(cards?|spells?|followers?|amulets?)|draw\s+(a|an)\s+(\d+)\s*-\s*cost\s+(spell|follower|amulet|card)|抽[取]?(\d+|X)张?(法术|随从|护符|卡牌)", immediate_text, re.I)
     if draw_match:
-        value = next((x for x in draw_match.groups() if x), "1")
-        card_kind = draw_match.group(2) or draw_match.group(4) or ""
+        groups = draw_match.groups()
+        # The first form is “draw a follower”; the second is “draw a
+        # 3-cost spell”; the final pair is the Chinese equivalent.
+        value = groups[0] or groups[2] or groups[5] or "1"
+        card_kind = groups[1] or groups[4] or groups[6] or ""
         draw_node = {"kind": "draw", "count": int(value) if value.isdigit() else (_variable_source(text) or (1 if value.lower() in ("a", "an") else "var:X"))}
         if re.search(r"spell|法术", card_kind, re.I):
             draw_node["target"] = {"scope": "any", "filters": {"zone": "deck", "card_type": "spell"}}
@@ -1614,6 +1729,9 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
             draw_node["target"] = {"scope": "any", "filters": {"zone": "deck", "card_type": "follower"}}
         elif re.search(r"amulet|护符", card_kind, re.I):
             draw_node["target"] = {"scope": "any", "filters": {"zone": "deck", "card_type": "amulet"}}
+        if groups[3]:
+            draw_node.setdefault("target", {"scope": "any", "filters": {"zone": "deck"}})
+            draw_node["target"].setdefault("filters", {})["max_cost"] = int(groups[3])
         node["effects"].append(draw_node)
     summon_match = None if dynamic_summon else re.search(r"summon\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+)|召唤\s*(\d+)?\s*(?:个|张)?『([^』]+)』", immediate_text, re.I)
     if summon_match:
@@ -1634,13 +1752,13 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     if _is_destroy_action(action_text):
         destroy_target = {"scope": "self"} if re.search(r"destroy\s+this\s+card|破坏本卡牌", action_text, re.I) else (target or {"scope": "any"})
         node["effects"].append({"kind": "destroy", "target": destroy_target})
-    if re.search(r"\bstorm\b|【疾驰】", text, re.I):
+    if re.search(r"\bstorm\b|【疾驰】", text, re.I) and "storm" not in removed_keywords:
         storm_target = last_words_target or target or {"scope": "self"}
         node["effects"].append({"kind": "grant_keyword", "keyword": "storm", "target": storm_target})
-    if re.search(r"\brush\b|【突进】", text, re.I):
+    if re.search(r"\brush\b|【突进】", text, re.I) and "rush" not in removed_keywords:
         rush_target = last_words_target or target or {"scope": "self"}
         node["effects"].append({"kind": "grant_keyword", "keyword": "rush", "target": rush_target})
-    if re.search(r"\bward\b|【守护】", text, re.I):
+    if re.search(r"\bward\b|【守护】", text, re.I) and "ward" not in removed_keywords:
         # A trailing keyword in “give all allied followers ... and Ward”
         # shares the preceding recipient.  Do not reuse a leader target from
         # an unrelated damage/heal sentence; bare Ward still means self.
@@ -1649,11 +1767,17 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         node["effects"].append({"kind": "grant_keyword", "keyword": "ward", "target": ward_target})
     if re.search(r"activate all of them instead|改为发动所有能力", text, re.I):
         node["effects"].append({"kind": "activate_all_mode_choices"})
-    for keyword, pattern in (("bane", r"\bbane\b"), ("ambush", r"\bambush\b"), ("aura", r"\baura\b"), ("barrier", r"\bbarrier\b")):
-        if re.search(pattern, text, re.I):
+    for keyword, pattern in (
+        ("bane", r"\bbane\b|必杀|毁灭"),
+        ("drain", r"\bdrain\b|虹吸|吸血"),
+        ("ambush", r"\bambush\b|潜行|突袭"),
+        ("aura", r"\baura\b"),
+        ("barrier", r"\bbarrier\b"),
+    ):
+        if re.search(pattern, text, re.I) and keyword not in removed_keywords:
             if not any(effect.get("kind") == "grant_keyword" and effect.get("keyword") == keyword for effect in node["effects"]):
                 node["effects"].append({"kind": "grant_keyword", "keyword": keyword, "target": {"scope": "self"}})
-            if re.fullmatch(r"(?:ambush|bane|aura|barrier)(?:\s+(?:ambush|bane|aura|barrier))*", text.strip(" ."), re.I):
+            if re.fullmatch(r"(?:ambush|bane|drain|aura|barrier|必杀|毁灭|虹吸|吸血|潜行|突袭)(?:\s+(?:ambush|bane|drain|aura|barrier|必杀|毁灭|虹吸|吸血|潜行|突袭))*", text.strip(" ."), re.I):
                 node["static_keywords"].append(keyword)
     if re.search(r"can't be destroyed by abilities|cannot be destroyed by abilities|不会被能力破坏", text, re.I):
         node["effects"].append({"kind": "grant_keyword", "keyword": "effect_indestructible", "target": {"scope": "self"}})
@@ -1662,6 +1786,8 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
             node["effects"].append({"kind": "grant_keyword", "keyword": keyword, "target": {"scope": "self"}})
             node["static_keywords"].append(keyword)
     for keyword, pattern in (("ambush", r"ambush|潜行"), ("bane", r"bane|必杀|毁灭"), ("drain", r"drain|虹吸"), ("intimidate", r"intimidate|威慑")):
+        if keyword in removed_keywords:
+            continue
         if re.fullmatch(pattern, text.strip("【】 "), re.I):
             node["effects"].append({"kind": "grant_keyword", "keyword": keyword, "target": {"scope": "self"}})
         elif re.search(rf"\bgive\s+(?:it|them|this follower)\s+({pattern})\b", text, re.I):
@@ -1669,6 +1795,19 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     for keyword, pattern in (("ward", r"ward|守护"), ("storm", r"storm|疾驰"), ("rush", r"rush|突进")):
         if re.match(rf"(?:【)?(?:{pattern})(?:】)?(?:\s|$)", text, re.I) and len(text.strip("【】 ")) > 3:
             node["static_keywords"].append(keyword)
+    # Field-wide wording without an allegiance qualifier ("all followers on
+    # the field") affects both sides.  Keep it separate from the allied/enemy
+    # shorthand below so the resulting ``any`` target remains explicit.
+    all_field_buff = re.search(r"give\s+all\s+followers?\s+on\s+the\s+field\s+([+-](?:\d+|x))/([+-](?:\d+|x))", text, re.I)
+    if all_field_buff:
+        attack = int(all_field_buff.group(1)) if all_field_buff.group(1).lstrip("+-").isdigit() else (_variable_source(text) or "var:X")
+        life = int(all_field_buff.group(2)) if all_field_buff.group(2).lstrip("+-").isdigit() else (_variable_source(text) or "var:X")
+        node["effects"].append({
+            "kind": "buff",
+            "target": {"scope": "any", "selection": "all", "filters": {"zone": "field", "card_type": "follower"}},
+            "attack": attack,
+            "life": life,
+        })
     buff_match = re.search(r"give\s+(this follower|all (?:other )?allied followers?|an allied follower|another allied follower|it|all enemy followers?)[^+\-]*([+-](?:\d+|x))/([+-](?:\d+|x))", text, re.I)
     if buff_match:
         subject = buff_match.group(1).lower()
@@ -1823,11 +1962,53 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     if quoted_status and not last_words_match and not faith_mode_ability:
         # In a summon trigger, ``give it`` refers to the follower that caused
         # the trigger, not to an arbitrary enemy selected from the sentence.
-        status_target = {"scope": "trigger_source"} if re.search(r"(?:whenever|when)\s+an?\s+enemy\s+follower\s+enters?\s+the\s+field", text, re.I) else (target or {"scope": "self"})
+        status_prefix = text[:quoted_status.start()]
+        # A quoted status is granted to the entity named immediately before
+        # the quote.  Reusing the broad target extracted from the full clause
+        # would incorrectly attach Yidmetra's listener to every allied
+        # follower because the quoted body itself mentions that board.
+        if re.search(r"\b(?:give|grant)\s+(?:this\s+follower|it|them)\s+", status_prefix, re.I):
+            status_target = {"scope": "trigger_source"}
+        else:
+            status_target = {"scope": "trigger_source"} if re.search(r"(?:whenever|when)\s+an?\s+enemy\s+follower\s+enters?\s+the\s+field", text, re.I) else (target or {"scope": "self"})
         duration = (quoted_status.group(2) or "permanent").strip(" .")
         if duration.casefold() in {"the end of your opponent's turn", "the end of your opponent’s turn"}:
             duration = "until_end_of_opponent_turn"
-        node["effects"].append({"kind": "grant_status", "status": quoted_status.group(1).strip(), "target": status_target, "duration": duration})
+        status_text = quoted_status.group(1).strip()
+        status_effect: dict[str, Any] = {"kind": "grant_status", "status": status_text, "target": status_target, "duration": duration}
+        # The most common persistent quoted ability is a listener rather than
+        # a keyword: “Whenever you play an Enhanced card, give all allied
+        # followers ...”.  Parse its body once and attach an executable
+        # ability so the runtime can dispatch it on the next card play.
+        enhanced_listener = re.match(r"whenever\s+you\s+play\s+an?\s+enhanced\s+card\s*,?\s*(.+)", status_text, re.I)
+        delayed_destroy = re.fullmatch(
+            r"at\s+the\s+end\s+of\s+your\s+opponent's\s+turn\s*,?\s*destroy\s+this\s+card\.?",
+            status_text,
+            re.I,
+        )
+        if enhanced_listener:
+            body = clause_to_ast({**clause, "plain": enhanced_listener.group(1).strip(), "trigger": "on_card_play", "mode_override": None})
+            nested_effects = list(body.get("effects", []))
+            if nested_effects and not body.get("unparsed") and not body.get("unparsed_clauses"):
+                status_effect["ability"] = {
+                    "trigger": "on_card_play",
+                    "condition": {"state": "last_played_mode", "cmp": "eq", "value": "enhance"},
+                    "effects": nested_effects,
+                }
+            else:
+                node["unparsed_clauses"].append(f"unsupported_nested:status:{status_text}")
+        elif delayed_destroy:
+            status_effect["ability"] = {
+                "trigger": "on_opponent_turn_end",
+                "effects": [{"kind": "destroy", "target": {"scope": "trigger_source"}}],
+            }
+        elif re.fullmatch(r"can\s+attack\s+\d+\s+times\s+per\s+turn\.?", status_text, re.I):
+            # This is represented by set_attacks below; retaining a textual
+            # gain_status node would only create a duplicate unsupported
+            # marker for the same executable capability.
+            status_effect = None
+        if status_effect is not None:
+            node["effects"].append(status_effect)
     reanimate_values = re.findall(r"reanimate\s*\((\d+)\)|亡者召还[_ ]?(\d+)", text, re.I)
     for values in reanimate_values:
         node["effects"].append({"kind": "reanimate", "cost": int(next(item for item in values if item))})
@@ -2009,6 +2190,11 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     crest_opponent = re.search(r"give\s+(?:your\s+)?opponent\s+crest\s*:\s*([^。；;\"」]+)", text, re.I)
     if crest_opponent:
         node["effects"].append({"kind": "gain_crest", "source_card_name": crest_opponent.group(1).strip().rstrip("."), "target": {"scope": "enemy_leader"}})
+    crest_both = re.search(r"give\s+yourself\s+and\s+your\s+opponent\s+crest\s*:\s*([^。；;\"」]+)", text, re.I)
+    if crest_both:
+        crest_name = crest_both.group(1).strip().rstrip(".")
+        node["effects"].append({"kind": "gain_crest", "source_card_name": crest_name, "target": {"scope": "ally_leader"}})
+        node["effects"].append({"kind": "gain_crest", "source_card_name": crest_name, "target": {"scope": "enemy_leader"}})
     # Advance the count of your Crest: X by N
     crest_advance = re.search(r"advance\s+the\s+count\s+of\s+your\s+crest\s*:\s*([^。；;\"」]+?)\s+by\s+(\d+)", text, re.I)
     if crest_advance:
@@ -2197,13 +2383,28 @@ def card_to_ast(card: dict[str, Any], primary_language: str = "eng") -> dict[str
     # confidence instead of silently selecting one language.
     paired: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
     for clause in clauses:
-        paired.setdefault((clause.get("source_key"), clause.get("index"), clause.get("section"), clause.get("mode")), []).append(clause)
+        paired.setdefault((clause.get("source_key"), clause.get("virtual_index", clause.get("index")), clause.get("section"), clause.get("mode")), []).append(clause)
+    # A single source sentence can be split into virtual English abilities
+    # (notably ``When ... Invoked ... Fanfare: ...``) while a translated CHS
+    # sentence remains unsplit.  English is the authoritative executable
+    # language; suppress the unsplit translation when the same original
+    # source index already has an English clause, otherwise the Chinese
+    # parser's broad fallback can duplicate or mis-trigger the ability.
+    english_origins = {
+        (clause.get("source_key"), clause.get("index"), clause.get("section"), clause.get("mode"))
+        for clause in clauses
+        if clause.get("source_language") == "eng"
+    }
     conflicts = []
     abilities = []
     for key, values in paired.items():
         by_language = {value.get("source_language"): value for value in values}
         chs = by_language.get("chs")
         eng = by_language.get("eng")
+        if primary_language == "eng" and eng is None and values:
+            origin = (values[0].get("source_key"), values[0].get("index"), values[0].get("section"), values[0].get("mode"))
+            if origin in english_origins:
+                continue
         audit_conflict = False
         if chs and eng:
             chs_effects = {comparison_signature(item) for item in chs.get("effects", [])}
@@ -2256,6 +2457,7 @@ def card_to_ast(card: dict[str, Any], primary_language: str = "eng") -> dict[str
             "source_language": primary_language if (primary_language == "eng" and eng) or (primary_language == "chs" and chs) else preferred.get("source_language", ""),
             "source_clause": {"chs": chs.get("source_clause", "") if chs else "", "eng": eng.get("source_clause", "") if eng else ""},
             "trigger": preferred.get("trigger"),
+            **({"trigger_filter": preferred.get("trigger_filter")} if isinstance(preferred.get("trigger_filter"), dict) else {}),
             "mode": preferred.get("mode"),
             "mode_cost": preferred.get("mode_cost"),
             "static_keywords": sorted(set(preferred.get("static_keywords", []))),

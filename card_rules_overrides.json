@@ -3,5 +3,122 @@
   "ruleset_revision": 2,
   "catalog_version": 1,
   "game_version": "",
-  "rules": {}
+  "rules": {
+    "10452130": {
+      "card_id": 10452130,
+      "support": "verified",
+      "source_hash": "3d2b295dc260dede3a99b44d03cb4a7a3b466cf60fceb5098f3246b0309cfd28",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 3,
+          "abilities": [
+            {
+              "trigger": "on_play",
+              "effects": [
+                {
+                  "op": "mode_choice",
+                  "choices": [
+                    {
+                      "label": "1",
+                      "effects": [
+                        {
+                          "op": "buff",
+                          "target": {"scope": "self"},
+                          "attack": 1,
+                          "life": 1
+                        },
+                        {
+                          "op": "buff",
+                          "target": {
+                            "scope": "ally_follower",
+                            "selection": "random",
+                            "count": 1,
+                            "filters": {"exclude_source": true}
+                          },
+                          "attack": 1,
+                          "life": 1
+                        }
+                      ]
+                    },
+                    {
+                      "label": "2",
+                      "effects": [
+                        {
+                          "op": "damage",
+                          "target": {
+                            "scope": "enemy_follower",
+                            "selection": "random",
+                            "count": 1
+                          },
+                          "amount": 3
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "90021210": {
+      "card_id": 90021210,
+      "support": "verified",
+      "source_hash": "365d9983424235b7e41404fc0538848bcacaad910db3ee3c723515cbc2e5922b",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 1,
+          "abilities": [
+            {
+              "trigger": "on_card_play",
+              "condition": {"state": "card_type", "cmp": "eq", "value": "spell"},
+              "effects": [
+                {"op": "modify_counter", "field": "countdown", "delta": 1, "target": {"scope": "self"}}
+              ]
+            },
+            {
+              "trigger": "on_last_word",
+              "effects": [
+                {"op": "damage", "target": {"scope": "enemy_leader"}, "amount": 2}
+              ]
+            }
+          ]
+        }
+      ],
+      "countdown": 7
+    },
+    "10924110": {
+      "card_id": 10924110,
+      "support": "verified",
+      "source_hash": "66041b251fcfc13dea4a14aa8253db6eaf464e7a2b4137f4632f6d7184131dc0",
+      "modes": [
+        {
+          "kind": "normal",
+          "cost": 7,
+          "abilities": [
+            {
+              "trigger": "on_fanfare",
+              "effects": [
+                {"op": "summon", "card_id": 90021210, "count": 1},
+                {
+                  "op": "modify_counter",
+                  "field": "countdown",
+                  "delta": 5,
+                  "target": {
+                    "scope": "ally_follower",
+                    "selection": "all",
+                    "filters": {"card_id": 90021210}
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "static_keywords": ["storm"]
+    }
+  }
 }

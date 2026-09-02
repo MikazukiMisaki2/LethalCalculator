@@ -1,0 +1,10 @@
+{
+  "root": {
+    "is_ally_turn": true,
+    "players": [
+      {"hand": [], "field": []},
+      {"life": 10, "hand": [], "field": []}
+    ]
+  },
+  "legal_actions": null
+}

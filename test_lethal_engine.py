@@ -74,5 +74,38 @@ class TestLethalEngine(unittest.TestCase):
         )
         self.assertAlmostEqual(prob, 1.0, places=4)
 
+    def test_max_damage_reports_best_non_lethal_sequence(self):
+        storm = LethalFollower(
+            unique_id=1,
+            card_id=100,
+            name="Storm",
+            atk=3,
+            hp=2,
+            has_storm=True,
+            can_attack_leader=True,
+            attacks_left=1,
+        )
+        shot = LethalHandCard(
+            unique_id=2,
+            card_id=101,
+            name="Shot",
+            cost=1,
+            type=4,
+            face_damage=2,
+        )
+        state = LethalState(
+            enemy_hp=10,
+            pp=1,
+            max_pp=1,
+            ep=0,
+            sep=0,
+            my_board=[storm],
+            hand=[shot],
+        )
+        damage, sequence = LethalEngine(max_depth=4).max_damage(state)
+        self.assertEqual(damage, 5)
+        self.assertEqual(len(sequence), 2)
+        self.assertEqual(state.enemy_hp, 10)  # analysis never mutates input
+
 if __name__ == "__main__":
     unittest.main()

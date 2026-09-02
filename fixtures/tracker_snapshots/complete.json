@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "current_turn": 7,
+  "root": {
+    "is_ally_turn": true,
+    "players": [
+      {
+        "unique_id": 1000,
+        "life": 18,
+        "max_life": 20,
+        "pp": 5,
+        "max_pp": 7,
+        "extra_pp": 1,
+        "preparation_extra_pp": 0,
+        "evolve_points": 1,
+        "super_evolve_points": 1,
+        "cemetery_count": 6,
+        "rally": 12,
+        "play_count": 4,
+        "is_awakening": false,
+        "turn": 7,
+        "deck_count": 24,
+        "hand": [
+          {
+            "unique_id": 101,
+            "card_id": 10021110,
+            "cost": 1,
+            "attack": 1,
+            "life": 1,
+            "card_type": 1,
+            "tribes": [5],
+            "enhance_costs": [],
+            "accelerate_costs": [],
+            "crystal_costs": [],
+            "spell_boost_count": 2,
+            "has_spell_boost": true,
+            "variable_x": 2,
+            "supplement_info": {"boost": 2},
+            "keywords": {"storm": true, "bane": false},
+            "buff": {
+              "sources": [{"card_id": 9001, "style_id": 0, "is_ally": true}],
+              "cost": -1,
+              "attack": 0,
+              "max_life_diff": 0,
+              "quick": false,
+              "rush": false
+            },
+            "available_modes": ["normal"]
+          }
+        ],
+        "field": [
+          {
+            "unique_id": 201,
+            "card_id": 10021110,
+            "cost": 1,
+            "attack": 3,
+            "life": 2,
+            "max_life": 3,
+            "card_type": 1,
+            "attack_targets": [401, 999],
+            "countdown": -1,
+            "evolve_state": 1,
+            "attack_limit": 1,
+            "has_guard": false,
+            "has_drain": false,
+            "has_sneak": false,
+            "has_last_word": false,
+            "has_spell_boost": false,
+            "has_cant_attack": false,
+            "is_earth_sigil": false,
+            "has_storm": true,
+            "keywords": {"storm": true, "ward": false},
+            "buff": {
+              "sources": [{"card_id": 9002, "style_id": 0, "is_ally": true, "is_evolve": false}],
+              "cost": 0,
+              "attack": 1,
+              "max_life_diff": 1,
+              "quick": false,
+              "rush": true,
+              "attack_limit": 1
+            },
+            "supplement_info": {"buff_attack": 1}
+          }
+        ],
+        "destroyed_card_ids": [[2001, 0], [2001, 0], [2002, 1]],
+        "faith_instances": [
+          {"source_card_id": 10354110, "unique_id": 501, "value": 8, "initial_value": 0, "mode_limit_bonus": 1}
+        ],
+        "crests": [
+          {"card_id": 10364120, "unique_id": 601, "countdown": 2, "variable_x": 1, "supplement_info": {"crest": 1}}
+        ],
+        "extra_crests": [],
+        "earth_sigil": 2,
+        "skybound_art": 1,
+        "super_skybound_art": 0,
+        "played_card_ids": [[10021110, 0]],
+        "attacked_with_follower_this_turn": false
+      },
+      {
+        "unique_id": 999,
+        "life": 9,
+        "max_life": 10,
+        "pp": 3,
+        "max_pp": 7,
+        "evolve_points": 0,
+        "super_evolve_points": 0,
+        "cemetery_count": 4,
+        "rally": 8,
+        "play_count": 2,
+        "is_awakening": false,
+        "hand": [],
+        "field": [
+          {
+            "unique_id": 401,
+            "card_id": 10001130,
+            "cost": 5,
+            "attack": 4,
+            "life": 4,
+            "max_life": 5,
+            "card_type": 1,
+            "attack_targets": [],
+            "countdown": -1,
+            "evolve_state": 0,
+            "attack_limit": 1,
+            "has_guard": true,
+            "has_drain": false,
+            "has_sneak": false,
+            "has_last_word": false,
+            "buff": null
+          }
+        ],
+        "destroyed_card_ids": []
+      }
+    ]
+  },
+  "legal_actions": {
+    "can_play_cards": [101],
+    "can_play_cards_with_extra_pp": [],
+    "can_enhance_play_cards": [],
+    "can_accelerate_play_cards": [],
+    "can_crystal_play_cards": [],
+    "can_attack_leader_cards": [201],
+    "can_attack_field_cards": [201],
+    "attacked_cards": [],
+    "can_evolve_cards": [201],
+    "can_super_evolve_cards": [],
+    "attack_targets": {"201": [401, 999]}
+  }
+}

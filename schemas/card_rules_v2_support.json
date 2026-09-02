@@ -8,7 +8,7 @@
     "buff": "implemented",
     "grant_keyword": "implemented",
     "gain_status": "implemented",
-    "remove_keyword": "planned",
+    "remove_keyword": "implemented",
     "remove_abilities": "implemented",
     "modify_damage_taken": "implemented",
     "summon": "implemented",
@@ -16,7 +16,7 @@
     "banish": "implemented",
     "draw": "implemented",
     "add_to_hand": "implemented",
-    "add_to_zone": "planned",
+    "add_to_zone": "implemented",
     "discard": "implemented",
     "return_to_hand": "implemented",
     "return_to_deck": "implemented",
@@ -34,7 +34,7 @@
     "set_stat": "implemented",
     "spellboost": "implemented",
     "reanimate": "implemented",
-    "invoke": "planned",
+    "invoke": "implemented",
     "transform": "implemented",
     "copy": "implemented",
     "auto_evolve": "implemented",
@@ -46,16 +46,16 @@
     "random_target": "implemented",
     "mode_choice": "implemented",
     "activate_all_mode_choices": "implemented",
-    "progressive_sequence": "planned",
-    "modify_previous_effect": "planned",
-    "replace_deck": "planned"
+    "progressive_sequence": "implemented",
+    "modify_previous_effect": "implemented",
+    "replace_deck": "implemented"
   },
   "keywords": {
-    "ambush": "planned",
+    "ambush": "implemented",
     "aura": "planned",
-    "bane": "planned",
+    "bane": "implemented",
     "barrier": "planned",
-    "drain": "planned",
+    "drain": "implemented",
     "earth_sigil": "planned",
     "effect_indestructible": "planned",
     "intimidate": "planned",
@@ -69,8 +69,8 @@
     "gain_status": "Canonical status operation. Legacy gain_status in card_rules.json is accepted by the runtime adapter but new v2 compiler output uses this name.",
     "remove_abilities": "Removes all printed and granted abilities from the selected permanent. The runtime stores an explicit abilities_removed flag; delayed effects still remain a planned boundary.",
     "modify_damage_taken": "Leader damage-taken delta (for example, 'Takes 1 more damage'). Permanent current-turn modifiers are executable; expiry is reported as incomplete.",
-    "modify_previous_effect": "Schema-only relation for replacement text such as 'instead'; it is never confirmation-safe until attached to a concrete base effect.",
-    "add_to_zone": "Explicit destination-aware insertion. Use add_to_hand only when destination is hand.",
+    "modify_previous_effect": "Implemented for compiler-resolved relations and adjacent runtime base effects; unresolved/non-adjacent relations remain explicit gaps.",
+    "add_to_zone": "Destination-aware insertion is implemented for hand, deck, cemetery, and field; banished insertion remains an explicit gap because the compact state has no public banished list.",
     "split": "Legacy alias. New compiler output must use ordered_split.",
     "ordered_split": "Assign damage in enemy board order, moving to the next follower only after lethal damage is assigned.",
     "random": "Probability-preserving execution is implemented for random target, repeat, draw and deck summon selectors when the public pool is known; hidden pools remain incomplete."
@@ -81,6 +81,12 @@
     ,"reanimate": "Implemented for follower identities present in destroyed_this_match. Cost/tribe/class filters and multiplicity are honored; an absent pool is reanimate_unknown_pool. Reanimate samples without consuming the pool entry and does not decrement cemetery/Shadow, so repeated effects can select the same entry again."
     ,"transform": "Implemented for static catalog targets and random targets from a public deck distribution. Hidden deck mass emits transform_unknown; no deck card is removed because the selector is sampled as a template. Dynamic opponent-deck/unknown selectors remain incomplete."
     ,"replicate_ability": "Implemented for one-level replication of another ability on the same card (normally Fanfare into Evolve/Engage). Missing, conditional-unknown, or recursively nested source abilities report an explicit replicate_* gap."
-    ,"keywords": "The vocabulary is closed at the schema boundary. Only Storm, Rush, and Ward are currently materialized by the lethal runtime; other canonical keywords remain schema-valid but planned and cannot be used by a verified rule."
+    ,"invoke": "Implemented for known hand/deck follower identities. Deck invocation consumes a known deck slot and resolves on_invoke (or legacy on_fanfare) and summon listeners; hidden/replaced deck identities remain incomplete.",
+    "progressive_sequence": "Implemented with an entity-owned sequence index; each trigger consumes one step, preserving independent copies and nested random branches.",
+    "replace_deck": "Implemented as an opaque named deck template. Existing identity distribution is cleared; future draws/selectors expose an explicit replaced-deck gap.",
+    "keywords": "Storm, Rush, Ward, Bane, Drain, and Ambush are materialized by the lethal runtime. Other canonical keywords remain schema-valid but planned and cannot be used by a verified rule.",
+    "bane": "Combat Bane destroys a surviving opposing combatant after damage; it does not bypass unrelated effect-indestructible rules.",
+    "drain": "Drain restores the allied leader by actual combat damage when leader defense is known; missing leader defense reports drain_target.",
+    "ambush": "Ambush blocks targeted enemy ability/combat selection and is removed when the follower attacks; area selectors still include it."
   }
 }

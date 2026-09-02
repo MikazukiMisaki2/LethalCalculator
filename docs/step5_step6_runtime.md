@@ -27,12 +27,17 @@ python -B -m unittest discover -s . -p 'test_*.py'
 python validate_contract.py --catalog data/generated/card_catalog.json --rules data/generated/card_rules_v2.json --coverage data/generated/card_rules_coverage_report.json
 ```
 
-当前夹具覆盖 146 个单元测试，包括独立暴力枚举 oracle、Cupitan 七次随机伤害 golden fixture、任意 `N random followers` 的连续激活、Night Song ordered split、Sophia/连妥丝随机召唤、随机抽牌/复制、Faith 多实例、Crest 多实例倒计时、Reanimate 重复条目概率和隐藏牌堆 `INCOMPLETE` 分支，以及 Step 7 的引用/词汇/覆盖门禁。
+当前夹具覆盖 211 个单元测试，包括独立暴力枚举 oracle、Cupitan 七次随机伤害 golden fixture、任意 `N random followers` 的连续激活、Night Song ordered split、Sophia/连妥丝随机召唤、随机抽牌/复制、Faith 多实例、Crest 多实例倒计时、Reanimate 重复条目概率和隐藏牌堆 `INCOMPLETE` 分支，以及 Step 7 的引用/词汇/覆盖门禁和 Step 8 Tracker 快照契约。
 
-当前 904 张卡的生成统计为 `generated=885`、`partial=9`、`unsupported=10`。`generated` 只表示 DSL 结构完整；`reanimate`、`replicate_ability`、`spellboost`、`transform` 已进入支持矩阵的 `implemented` 子集，但公开信息不足的分支仍会保留明确的 `INCOMPLETE` 原因：
+当前 904 张卡的生成统计为 `generated=904`、`partial=0`、`unsupported=0`。`generated` 只表示 DSL 结构完整；`reanimate`、`replicate_ability`、`spellboost`、`transform`、`invoke`、`progressive_sequence`、`modify_previous_effect`、`replace_deck` 和 `add_to_zone` 已进入支持矩阵的 `implemented` 子集，但公开信息不足的分支仍会保留明确的 `INCOMPLETE` 原因：
 
 - Reanimate 从 Tracker 提供的 `destroyed_card_ids` 破坏池中选择随从；数组中的重复条目保留概率权重。复活不会移除池中条目，也不会扣减墓地/Shadow；后续 Reanimate 仍可再次选到同一条目。消失/放逐只影响当前场面，不会从已经记录的 `destroyed_card_ids` 历史池中删除条目；缺少该字段时返回 `reanimate_unknown_pool`。
 - Cemetery/Shadow 是可消耗的计数器：只有 `consume_resource`（包括 Necromancy/Earth Rite 分支）会减少它；Reanimate 只读取破坏池，不消耗 Shadow。法术自身的 Shadow 在该法术效果解析完成后加入，因此不会为自己的 Necromancy 阈值提供资源。
 - Transform 的静态目标和公开牌堆随机模板可以展开；隐藏牌堆、对手牌堆或无法解析的动态来源产生 `transform_unknown`。
 - Replicate Ability 支持同卡单层 Fanfare→Evolve/Engage 复制；缺失来源、未知条件和递归嵌套会报告 `replicate_*`。
 - Spellboost 会按手牌实体的 `spell_boost_count` 逐次递增并触发 `on_spellboost`；随机手牌选择按公开候选均匀分支。
+- Invoke 会从已知手牌或公开牌库分布中取出随从，不扣 PP/Play Count，并触发 `on_invoke`；旧目录将“被瞬念时”挂在 Fanfare 的卡牌走 Fanfare 兼容路径。未知/替换牌库不会猜测卡牌。
+- Progressive Sequence 在每个场上实体上保存 `progressive_sequence_index`，一次触发只执行一个 step；step 内的随机目标仍由分支解释器展开。
+- `modify_previous_effect` 对编译器未能提前消解、且紧邻基础效果的关系会回滚基础效果并只执行替换版本；缺少邻接基础效果的关系返回显式缺口。
+- `replace_deck` 将旧牌库分布清空并保存命名模板；模板中的抽牌、随机召唤和变身均保留 `*_replaced_deck` 不确定性。
+- `remove_keyword` 与 Bane/Drain/Ambush 已物化到 follower status：Bane 在战斗伤害后摧毁仍存活的战斗者，Drain 按实际战斗伤害回复己方主战者，Ambush 阻止被指定/攻击并在其攻击时解除；全体区域效果仍可命中 Ambush。

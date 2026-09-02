@@ -1,18 +1,95 @@
 """Minimal event-driven rules interpreter for CardRules v2.
 
 The runtime supports the deterministic lethal primitives (play, damage,
-buffs, PP recovery, Storm/Rush, Ward combat, evolve, resources and delayed
-leader effects) plus a probability-preserving branch API for known random
-targets, draws and deck selectors.  Unsupported effects are reported instead
-of being silently ignored.
+buffs, PP recovery, Storm/Rush/Ward, Bane/Drain/Ambush combat, evolve,
+resources, invocation and delayed leader effects) plus a
+probability-preserving branch API for known random targets, draws and deck
+selectors. Unsupported effects are reported instead of being silently
+ignored.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import re
 from typing import Any, Mapping
 
 from lethal_models import LethalFollower, LethalHandCard, LethalState
+
+
+# ``CardCatalog`` intentionally stores compact numeric tribe ids.  Text rules
+# use the stable English keyword, so normalize the current game's public tribe
+# table at the interpreter boundary (and retain the numeric spelling too).
+_TRIBE_ALIASES: dict[int, str] = {
+    2: "officer",
+    3: "luminous",
+    4: "levin",
+    5: "pixie",
+    6: "departed",
+    8: "earth sigil",
+    11: "mysteria",
+    12: "golem",
+    13: "shikigami",
+    14: "artifact",
+    15: "puppetry",
+    17: "marine",
+    18: "loot",
+    19: "encroacher",
+    20: "anathema",
+}
+
+
+# Runtime-confirmed keyword subset.  The schema vocabulary is intentionally
+# broader than this set; only keywords whose state transitions are modeled
+# here may be used by a confirmed lethal line.
+_IMPLEMENTED_KEYWORDS = frozenset({"storm", "rush", "ward", "bane", "drain", "ambush"})
+_KEYWORD_ALIASES = {
+    "必杀": "bane", "毁灭": "bane", "bane": "bane",
+    "虹吸": "drain", "吸血": "drain", "drain": "drain",
+    "潜行": "ambush", "突袭": "ambush", "ambush": "ambush",
+    "疾驰": "storm", "storm": "storm", "突进": "rush", "rush": "rush",
+    "守护": "ward", "ward": "ward",
+}
+
+
+def _normalize_keyword(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    return _KEYWORD_ALIASES.get(text, text)
+
+
+def _has_keyword(entity: LethalFollower | LethalHandCard, keyword: str) -> bool:
+    wanted = _normalize_keyword(keyword)
+    statuses = getattr(entity, "statuses", ())
+    if isinstance(statuses, str):
+        statuses = (statuses,)
+    if any(_normalize_keyword(item) == wanted for item in statuses):
+        return True
+    # Storm is the stronger attack keyword and carries Rush semantics in the
+    # combat model.  Preserve that implication for status-only fixtures too.
+    if wanted == "rush" and any(_normalize_keyword(item) == "storm" for item in statuses):
+        return True
+    # Minimal/legacy fixtures often set only the original boolean fields.
+    # Treat those fields as equivalent to their canonical status so Bane,
+    # Drain and Ambush remain explicit while Storm/Rush/Ward compatibility is
+    # preserved for snapshots created before ``statuses`` was added.
+    flags = {
+        "storm": bool(getattr(entity, "has_storm", False) or getattr(entity, "static_storm", False)),
+        "rush": bool(getattr(entity, "has_rush", False) or getattr(entity, "static_rush", False)),
+        "ward": bool(getattr(entity, "is_ward", False)),
+        "bane": bool(getattr(entity, "has_bane", False)),
+        "drain": bool(getattr(entity, "has_drain", False)),
+        "ambush": bool(getattr(entity, "has_ambush", False)),
+    }
+    if wanted == "rush" and flags["storm"]:
+        return True
+    return bool(flags.get(wanted, False))
+
+
+def _without_keyword(statuses: Any, keyword: str) -> tuple[str, ...]:
+    wanted = _normalize_keyword(keyword)
+    if isinstance(statuses, str):
+        statuses = (statuses,)
+    return tuple(sorted({str(item) for item in (statuses or ()) if _normalize_keyword(item) != wanted}))
 
 
 @dataclass(frozen=True)
@@ -51,6 +128,30 @@ class EventInterpreter:
                 except (TypeError, ValueError):
                     continue
         self.card_db: dict[int, LethalHandCard] = {int(key): value for key, value in (card_db or {}).items() if isinstance(value, LethalHandCard)}
+
+    def _base_card_cost(self, card: LethalHandCard) -> int:
+        """Return the printed/base cost, ignoring temporary hand discounts."""
+        meta = self.catalog.get(int(card.card_id), {})
+        raw = meta.get("cost") if isinstance(meta, Mapping) else None
+        try:
+            return int(raw) if raw is not None else int(card.cost)
+        except (TypeError, ValueError):
+            return int(card.cost)
+
+    def _static_keywords(self, card_id: int, card: LethalHandCard | None = None) -> set[str]:
+        rule = self.rules.get(int(card_id), {})
+        raw = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
+        values = {_normalize_keyword(item) for item in raw if str(item).strip()} if isinstance(raw, (list, tuple, set)) else set()
+        if card is not None:
+            values.update(_normalize_keyword(item) for item in getattr(card, "statuses", ()) if str(item).strip())
+            if card.static_storm:
+                values.add("storm")
+            if card.static_rush:
+                values.add("rush")
+            for keyword in ("bane", "drain", "ambush"):
+                if getattr(card, f"has_{keyword}", False):
+                    values.add(keyword)
+        return values
 
     def mode_cost(self, card: LethalHandCard, mode: str = "normal") -> int | None:
         """Return the cost for exactly one selected play mode.
@@ -94,6 +195,13 @@ class EventInterpreter:
             )
             if mode != "normal" and mode not in rule_modes and not has_explicit_card_mode:
                 continue
+            if state is not None and getattr(state, "legal_modes_known", False):
+                # Tracker's mode lists are authoritative for this hand
+                # entity. An explicitly empty tuple means no mode is legal;
+                # never fall back to the printed card rule in that case.
+                allowed = getattr(state, "legal_modes", {}).get(int(card.unique_id))
+                if allowed is None or mode not in allowed:
+                    continue
             if state is None or self._available_pp(state) >= cost:
                 result.append((mode, cost))
         return tuple(result)
@@ -133,6 +241,10 @@ class EventInterpreter:
         if index is None:
             return InterpreterResult(state, warnings=(f"hand card {unique_id} not found",))
         card = state.hand[index]
+        if getattr(state, "legal_modes_known", False):
+            allowed_modes = state.legal_modes.get(int(unique_id))
+            if allowed_modes is None or mode not in allowed_modes:
+                return InterpreterResult(state, warnings=(f"Tracker forbids {mode} play for {unique_id}",))
         play_cost = self.mode_cost(card, mode)
         if play_cost is None:
             return InterpreterResult(state, warnings=(f"mode {mode} is not available for {card.name}",))
@@ -153,13 +265,17 @@ class EventInterpreter:
                 warnings=(f"insufficient {resource} (need {need}, have {have})",),
             )
         next_state = state.clone()
+        self._invalidate_snapshot_legality(next_state)
         next_state.hand.pop(index)
         if not self._pay_pp(next_state, play_cost):
             return InterpreterResult(state, warnings=(f"insufficient PP for {card.name}",))
         next_state.play_count += 1
         next_state.last_played_card_cost = int(play_cost)
+        next_state.last_played_mode = str(mode)
         next_state.last_played_card_type = card.type
         next_state.last_played_tribes = tuple(card.tribes)
+        base_cost = self._base_card_cost(card)
+        next_state.played_base_costs = tuple(sorted(set(next_state.played_base_costs) | {base_cost}))
         self._ensure_catalog_resources(next_state, card.card_id, card.unique_id)
         rule = self.rules.get(card.card_id, {})
         # A follower is already on the field when its Fanfare resolves, so
@@ -168,19 +284,30 @@ class EventInterpreter:
         intrinsic_damage = card.enhance_face_damage if enhanced and card.enhance_face_damage else (card.face_damage if mode == "normal" else 0)
         intrinsic_recover = card.enhance_recover_pp if enhanced and card.enhance_recover_pp else (card.recover_pp if mode == "normal" else 0)
         intrinsic_buff = card.enhance_buff_atk if enhanced and card.enhance_buff_atk else (card.buff_atk if mode == "normal" else 0)
+        board_uids_before = {f.unique_id for f in next_state.my_board}
         if places_follower:
-            static = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
+            static = self._static_keywords(card.card_id, card)
+            default_attacks = rule.get("default_attacks", 1) if isinstance(rule, Mapping) else 1
+            try:
+                default_attacks = max(1, int(default_attacks))
+            except (TypeError, ValueError):
+                default_attacks = 1
             storm = card.static_storm or (enhanced and card.enhance_gain_storm) or "storm" in static
             rush = card.static_rush or "rush" in static or storm
             next_state.my_board.append(LethalFollower(
                 unique_id=card.unique_id, card_id=card.card_id, name=card.name,
                 atk=card.atk + intrinsic_buff, hp=card.life, has_storm=storm, has_rush=rush,
-                is_ward="ward" in static, can_attack_leader=storm, can_attack_field=rush, attacks_left=1,
+                is_ward="ward" in static, can_attack_leader=storm, can_attack_field=rush, attacks_left=default_attacks,
+                statuses=tuple(sorted(set(str(item) for item in static))),
                 base_cost=card.cost,
                 spell_boost_count=card.spell_boost_count,
                 has_spell_boost=card.has_spell_boost or self._card_has_trigger(card.card_id, "on_spellboost"),
                 variable_x=card.variable_x,
                 supplement_info=card.supplement_info,
+                has_bane="bane" in static,
+                has_drain="drain" in static,
+                has_ambush="ambush" in static,
+                buff=card.buff,
             ))
             next_state.last_created_uid = card.unique_id
         next_state.selected_mode_choice = choice
@@ -193,7 +320,10 @@ class EventInterpreter:
             and self._mode_has_choice(rule, mode)
             and not (next_state.super_skybound_art > 0 and self._mode_has_activate_all(rule, mode))
         ):
-            mode_event = self.select_mode(on_play.state)
+            mode_event = self.select_mode(
+                on_play.state,
+                count=self._mode_selection_count(rule, mode, choice),
+            )
             on_play = InterpreterResult(
                 mode_event.state,
                 tuple(sorted(set(on_play.unsupported_ops) | set(mode_event.unsupported_ops))),
@@ -202,8 +332,27 @@ class EventInterpreter:
         fanfare = self._resolve_abilities(on_play.state, rule, mode, "on_fanfare", source_uid=card.unique_id, target_uid=target_uid, choice=choice)
         summon = self._resolve_abilities(fanfare.state, rule, mode, "on_summon", source_uid=card.unique_id, target_uid=target_uid, choice=choice) if places_follower else InterpreterResult(fanfare.state)
         next_state = summon.state
-        ally_summon = self._resolve_board_trigger(next_state, "on_ally_follower_summon") if places_follower else InterpreterResult(next_state)
+        entered_uids = [f.unique_id for f in next_state.my_board if f.unique_id not in board_uids_before]
+        ally_summon = self._resolve_board_trigger(next_state, "on_ally_follower_summon") if entered_uids else InterpreterResult(next_state)
         next_state = ally_summon.state
+        filtered_unsupported: set[str] = set()
+        filtered_warnings: list[str] = []
+        for event_uid in entered_uids:
+            filtered = self._resolve_board_trigger(next_state, "on_ally_follower_summon", event_uid=event_uid)
+            next_state = filtered.state
+            filtered_unsupported.update(filtered.unsupported_ops)
+            filtered_warnings.extend(filtered.warnings)
+        if filtered_unsupported or filtered_warnings:
+            ally_summon = InterpreterResult(
+                next_state,
+                tuple(sorted(set(ally_summon.unsupported_ops) | filtered_unsupported)),
+                ally_summon.warnings + tuple(filtered_warnings),
+            )
+        # Persistent listeners granted by cards such as Yidmetra observe the
+        # completed play mode. ``last_played_mode`` is set before resolution,
+        # so their condition can distinguish Enhance from a normal play.
+        card_play = self._resolve_board_trigger(next_state, "on_card_play")
+        next_state = card_play.state
         # Spellboost is a global event: playing a spell triggers each allied
         # follower that has an on_spellboost ability. Resolve in board order
         # so deterministic buffs and resource changes are reproducible.
@@ -233,12 +382,133 @@ class EventInterpreter:
         if self._is_spell_card(card):
             next_state = next_state.clone()
             next_state.cemetery += 1
-        unsupported = set(on_play.unsupported_ops) | set(fanfare.unsupported_ops) | set(summon.unsupported_ops) | set(ally_summon.unsupported_ops) | set(spellboost.unsupported_ops)
+        unsupported = set(on_play.unsupported_ops) | set(fanfare.unsupported_ops) | set(summon.unsupported_ops) | set(ally_summon.unsupported_ops) | set(card_play.unsupported_ops) | set(spellboost.unsupported_ops)
         static_keywords = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
-        unsupported.update(f"static_keyword:{keyword}" for keyword in static_keywords if keyword not in ("storm", "rush", "ward"))
+        unsupported.update(f"static_keyword:{keyword}" for keyword in static_keywords if _normalize_keyword(keyword) not in _IMPLEMENTED_KEYWORDS)
         if rule.get("support") in ("partial", "unsupported"):
             unsupported.add(f"{rule.get('support')}_rule:{card.card_id}")
-        return InterpreterResult(next_state, tuple(sorted(unsupported)), on_play.warnings + fanfare.warnings + summon.warnings + ally_summon.warnings + spellboost.warnings)
+        return InterpreterResult(next_state, tuple(sorted(unsupported)), on_play.warnings + fanfare.warnings + summon.warnings + ally_summon.warnings + card_play.warnings + spellboost.warnings)
+
+    @staticmethod
+    def _heal_leader_for_drain(state: LethalState, amount: int, unsupported: set[str], warnings: list[str]) -> LethalState:
+        """Restore the allied leader's defense for a Drain combat event."""
+        amount = max(0, int(amount))
+        if amount <= 0:
+            return state
+        current = state.clone()
+        if current.ally_hp or current.ally_max_hp:
+            cap = current.ally_max_hp or current.ally_hp + amount
+            current.ally_hp = min(cap, current.ally_hp + amount)
+        else:
+            # A minimal hand-built state may omit leader defense.  Preserve the
+            # event as an explicit gap instead of claiming a healed value.
+            unsupported.add("drain_target")
+        return current
+
+    def _destroy_ally_uid(self, state: LethalState, uid: int, unsupported: set[str], warnings: list[str]) -> LethalState:
+        """Destroy one allied permanent and run its public death pipeline."""
+        index = next((i for i, item in enumerate(state.my_board) if item.unique_id == uid), None)
+        if index is None:
+            return state
+        current = state.clone()
+        removed = current.my_board.pop(index)
+        current.cemetery += 1
+        self._record_destroyed(current, removed)
+        if self._is_amulet(removed):
+            faith_result = self._resolve_faith_trigger(current, "on_ally_amulet_destroy")
+            current = faith_result.state
+            unsupported.update(faith_result.unsupported_ops)
+            warnings.extend(faith_result.warnings)
+        last_words = self._resolve_last_words(current, removed)
+        current = last_words.state
+        unsupported.update(last_words.unsupported_ops)
+        warnings.extend(last_words.warnings)
+        return current
+
+    @staticmethod
+    def _destroy_enemy_uid(state: LethalState, uid: int) -> LethalState:
+        current = state.clone()
+        index = next((i for i, item in enumerate(current.enemy_board) if item.unique_id == uid), None)
+        if index is not None:
+            current.last_destroyed_snapshot = current.enemy_board.pop(index)
+        return current
+
+    @staticmethod
+    def _snapshot_allows_attack(state: LethalState, attacker_uid: int, target_uid: Any = None, *, leader: bool = False) -> bool:
+        """Honor Tracker LegalActions/AttackTargets when the snapshot is authoritative.
+
+        Hand-built solver fixtures leave ``legal_actions_known`` false and
+        continue to use the intrinsic Storm/Rush model.  A live Tracker
+        snapshot sets it true and includes an entry for every ally follower;
+        an absent entry or an empty target list therefore means that attack is
+        currently illegal rather than an invitation to guess.
+        """
+        # A live Tracker snapshot may expose only ``FieldCard.attack_targets``
+        # (for example when BattleViewServerData is unavailable).  Enforce
+        # that projection independently of the broader LegalActions object;
+        # hand-built legacy states leave both presence bits false and retain
+        # the intrinsic Storm/Rush behavior.
+        if not getattr(state, "legal_actions_known", False) and not getattr(state, "attack_targets_known", False):
+            return True
+        targets = getattr(state, "legal_attack_targets", {}).get(int(attacker_uid))
+        if targets is None:
+            return False
+        if leader:
+            leader_uid = getattr(state, "enemy_leader_uid", None)
+            markers = {"leader", "enemy_leader", "enemy_leader_uid"}
+            if leader_uid is not None:
+                markers.add(leader_uid)
+                markers.add(str(leader_uid).casefold())
+            return any(target in markers or str(target).casefold() in markers for target in targets)
+        if target_uid in targets:
+            return True
+        # JSON snapshots may stringify dictionary/list ids even though the
+        # Tracker dataclass uses integers.  UID equality is numeric identity,
+        # not a representation detail.
+        return any(str(target_uid) == str(target) for target in targets)
+
+    @staticmethod
+    def _invalidate_snapshot_legality(state: LethalState) -> None:
+        """Drop one-shot Tracker legality after a hypothetical state mutation.
+
+        LegalActions describes the live board at refresh time. Once the solver
+        plays/evolves/attacks in a branch, those UID lists are stale (summons,
+        deaths and new modes may have changed them). Keep the projections for
+        UI inspection but stop enforcing them in the simulated successor.
+        """
+        state.legal_actions_known = False
+        state.attack_targets_known = False
+        state.legal_modes_known = False
+
+    @staticmethod
+    def _evolution_unlocked(state: LethalState, *, super_evolve: bool) -> bool:
+        """Return whether the Tracker-reported evolve turn has arrived.
+
+        ``LegalActions`` is a point-in-time projection and is intentionally
+        invalidated after a hypothetical action.  The unlock turn is stable
+        for the match, so it remains a second, persistent legality guard.
+        Hand-built legacy states leave the fields as ``None`` and retain the
+        historical intrinsic EP/SEP behavior.
+        """
+        threshold = getattr(state, "super_evolve_turn" if super_evolve else "evolve_turn", None)
+        if threshold is None:
+            return True
+        current = getattr(state, "turn_number", None)
+        if current is None:
+            # A threshold without a current turn cannot be proven legal.
+            return False
+        return int(current) >= int(threshold)
+
+    @classmethod
+    def _evolution_unlock_warning(cls, state: LethalState, *, super_evolve: bool) -> str:
+        kind = "super-evolve" if super_evolve else "evolve"
+        threshold = getattr(state, "super_evolve_turn" if super_evolve else "evolve_turn", None)
+        current = getattr(state, "turn_number", None)
+        if threshold is None:
+            return f"{kind} unlock turn is unknown"
+        if current is None:
+            return f"{kind} unlock turn {threshold} cannot be checked without current turn"
+        return f"{kind} is locked until turn {threshold} (current turn {current})"
 
     def attack_follower(self, state: LethalState, attacker_uid: int, target_uid: int) -> InterpreterResult:
         ai = next((i for i, f in enumerate(state.my_board) if f.unique_id == attacker_uid), None)
@@ -247,57 +517,147 @@ class EventInterpreter:
             return InterpreterResult(state, warnings=("combat target not found",))
         attacker = state.my_board[ai]
         target = state.enemy_board[ti]
-        if not attacker.can_attack_field or attacker.attacks_left <= 0:
+        if not self._snapshot_allows_attack(state, attacker_uid, target_uid):
+            return InterpreterResult(state, warnings=(f"Tracker forbids attack {attacker_uid}->{target_uid}",))
+        if not (attacker.can_attack_field or _has_keyword(attacker, "rush") or attacker.is_evolved) or attacker.attacks_left <= 0:
             return InterpreterResult(state, warnings=(f"{attacker.name} cannot attack a follower",))
-        if any(f.is_ward for f in state.enemy_board) and not target.is_ward:
+        if any(_has_keyword(f, "ward") for f in state.enemy_board) and not _has_keyword(target, "ward"):
             return InterpreterResult(state, warnings=("Ward must be attacked first",))
+        # Ambush prevents enemy followers from selecting this permanent in
+        # combat.  (Area effects may still hit it; target filtering below keeps
+        # that distinction.)
+        if _has_keyword(target, "ambush"):
+            return InterpreterResult(state, warnings=(f"{target.name} is hidden by Ambush",))
         next_state = state.clone()
+        self._invalidate_snapshot_legality(next_state)
         # The attack occurred even when the attacker dies in combat; Crest's
         # “didn't attack this turn” condition must therefore observe it before
         # Last Words resolve and remove the entity.
         next_state.attacked_with_follower_this_turn = True
+        next_state.attacked_card_uids = tuple(dict.fromkeys((*next_state.attacked_card_uids, attacker_uid)))
+        # An Ambush attacker becomes targetable as soon as it attacks.  Keep
+        # the rest of its entity state intact while removing only that status.
+        attacker_for_combat = (
+            replace(
+                attacker,
+                # Ambush is a one-shot concealment state: the first attack
+                # reveals the entity.  Clear both the extensible status and
+                # the explicit projection so a later targeted effect cannot
+                # still treat this attacker as hidden.
+                statuses=_without_keyword(attacker.statuses, "ambush"),
+                has_ambush=False,
+            )
+            if _has_keyword(attacker, "ambush")
+            else attacker
+        )
         next_state.enemy_board.pop(ti)
-        remaining_target_hp = target.hp - attacker.atk
+        dealt_to_target = min(max(0, attacker_for_combat.atk), max(0, target.hp))
+        remaining_target_hp = target.hp - attacker_for_combat.atk
         if remaining_target_hp > 0:
             next_state.enemy_board.insert(ti, replace(target, hp=remaining_target_hp))
-        remaining_attacker_hp = attacker.hp - target.atk
+        else:
+            # Preserve the complete enemy snapshot for a following
+            # "copy/destroyed follower" effect.  The card remains in the
+            # match's public destroyed pool only when it is an allied
+            # permanent; an enemy snapshot is intentionally transient.
+            next_state.last_destroyed_snapshot = target
+        remaining_attacker_hp = attacker_for_combat.hp - target.atk
         next_state.my_board.pop(ai)
+        combat_unsupported: set[str] = set()
+        combat_warnings: list[str] = []
         if remaining_attacker_hp > 0:
-            next_state.my_board.insert(ai, replace(attacker, hp=remaining_attacker_hp, attacks_left=attacker.attacks_left - 1))
+            next_state.my_board.insert(ai, replace(attacker_for_combat, hp=remaining_attacker_hp, attacks_left=attacker.attacks_left - 1))
         else:
             next_state.cemetery += 1
-            self._record_destroyed(next_state, attacker)
-            last_words = self._resolve_last_words(next_state, attacker)
+            self._record_destroyed(next_state, attacker_for_combat)
+            last_words = self._resolve_last_words(next_state, attacker_for_combat)
             next_state = last_words.state
-            return InterpreterResult(next_state, last_words.unsupported_ops, last_words.warnings)
-        return InterpreterResult(next_state)
+            combat_unsupported.update(last_words.unsupported_ops)
+            combat_warnings.extend(last_words.warnings)
+        # Bane destroys a surviving combat target.  Resolve it after normal
+        # combat damage so lethal damage and Bane are idempotent.
+        if _has_keyword(attacker_for_combat, "bane") and remaining_target_hp > 0:
+            next_state = self._destroy_enemy_uid(next_state, target.unique_id)
+        if _has_keyword(target, "bane") and remaining_attacker_hp > 0:
+            next_state = self._destroy_ally_uid(next_state, attacker_uid, combat_unsupported, combat_warnings)
+        if _has_keyword(attacker_for_combat, "drain"):
+            next_state = self._heal_leader_for_drain(next_state, dealt_to_target, combat_unsupported, combat_warnings)
+        # Clash/Strike are emitted by the completed combat event.  Resolve
+        # them after damage and Last Words so a surviving source sees its
+        # updated entity state; a printed ability remains resolvable even if
+        # the source died during the exchange.
+        rule = self.rules.get(attacker.card_id, {})
+        for trigger in ("on_clash", "on_follower_attack"):
+            triggered = self._resolve_abilities(next_state, rule, "normal", trigger, source_uid=attacker.unique_id, target_uid=target_uid)
+            next_state = triggered.state
+            combat_unsupported.update(triggered.unsupported_ops)
+            combat_warnings.extend(triggered.warnings)
+        return InterpreterResult(next_state, tuple(sorted(combat_unsupported)), tuple(combat_warnings))
 
     def attack_leader(self, state: LethalState, attacker_uid: int) -> InterpreterResult:
         index = next((i for i, f in enumerate(state.my_board) if f.unique_id == attacker_uid), None)
         if index is None:
             return InterpreterResult(state, warnings=(f"attacker {attacker_uid} not found",))
         attacker = state.my_board[index]
-        if any(f.is_ward for f in state.enemy_board):
+        if not self._snapshot_allows_attack(state, attacker_uid, leader=True):
+            return InterpreterResult(state, warnings=(f"Tracker forbids follower {attacker_uid} attacking leader",))
+        if any(_has_keyword(f, "ward") for f in state.enemy_board):
             return InterpreterResult(state, warnings=("Ward blocks leader attack",))
-        if not attacker.can_attack_leader or attacker.attacks_left <= 0:
+        if not (attacker.can_attack_leader or _has_keyword(attacker, "storm")) or attacker.attacks_left <= 0:
             return InterpreterResult(state, warnings=(f"{attacker.name} cannot attack leader",))
         next_state = state.clone()
-        next_state.enemy_hp -= max(0, attacker.atk + int(next_state.enemy_damage_taken_modifier))
-        next_state.my_board[index] = replace(attacker, attacks_left=attacker.attacks_left - 1)
+        self._invalidate_snapshot_legality(next_state)
+        # Ambush is broken by the first attack, regardless of whether the
+        # target is the leader or a follower.
+        attacker_for_combat = (
+            replace(
+                attacker,
+                statuses=_without_keyword(attacker.statuses, "ambush"),
+                has_ambush=False,
+            )
+            if _has_keyword(attacker, "ambush")
+            else attacker
+        )
+        dealt = max(0, attacker_for_combat.atk + int(next_state.enemy_damage_taken_modifier))
+        next_state.enemy_hp -= dealt
+        next_state.my_board[index] = replace(attacker_for_combat, attacks_left=attacker.attacks_left - 1)
         next_state.attacked_with_follower_this_turn = True
-        return InterpreterResult(next_state)
+        next_state.attacked_card_uids = tuple(dict.fromkeys((*next_state.attacked_card_uids, attacker_uid)))
+        rule = self.rules.get(attacker.card_id, {})
+        triggered = self._resolve_abilities(next_state, rule, "normal", "on_leader_attack", source_uid=attacker_uid)
+        unsupported = set(triggered.unsupported_ops)
+        warnings = list(triggered.warnings)
+        if _has_keyword(attacker_for_combat, "drain"):
+            healed = self._heal_leader_for_drain(triggered.state, dealt, unsupported, warnings)
+            return InterpreterResult(healed, tuple(sorted(unsupported)), tuple(warnings))
+        return InterpreterResult(triggered.state, tuple(sorted(unsupported)), tuple(warnings))
 
     def evolve(self, state: LethalState, attacker_uid: int, *, super_evolve: bool = False, target_uid: Any = None) -> InterpreterResult:
         index = next((i for i, f in enumerate(state.my_board) if f.unique_id == attacker_uid), None)
         if index is None:
             return InterpreterResult(state, warnings=(f"follower {attacker_uid} not found",))
         follower = state.my_board[index]
+        if getattr(state, "legal_actions_known", False):
+            allowed = state.legal_super_evolve_uids if super_evolve else state.legal_evolve_uids
+            if attacker_uid not in allowed:
+                return InterpreterResult(state, warnings=(f"Tracker forbids evolving follower {attacker_uid}",))
+        if not self._evolution_unlocked(state, super_evolve=super_evolve):
+            return InterpreterResult(state, warnings=(self._evolution_unlock_warning(state, super_evolve=super_evolve),))
+        # Shadowverse permits at most one player-initiated evolution per
+        # turn.  ``evolved_allies_this_turn`` is populated from Tracker's
+        # ``is_evolved_this_turn`` projection and survives hypothetical
+        # actions.  This gate intentionally applies only to this manual
+        # action; card effects use ``auto_evolve`` and may evolve additional
+        # followers for free.
+        if getattr(state, "manual_evolutions_this_turn", 0) > 0:
+            return InterpreterResult(state, warnings=("only one manual evolution is allowed per turn",))
         if follower.is_evolved:
             return InterpreterResult(state, warnings=(f"{follower.name} already evolved",))
         points = state.sep if super_evolve else state.ep
         if points <= 0:
             return InterpreterResult(state, warnings=("no evolve points",))
         next_state = state.clone()
+        self._invalidate_snapshot_legality(next_state)
         if super_evolve:
             next_state.sep -= 1
             delta = 3
@@ -312,10 +672,11 @@ class EventInterpreter:
             hp=follower.hp + delta,
             is_evolved=True,
             is_super_evolved=super_evolve,
-            can_attack_leader=follower.has_storm,
+            can_attack_leader=follower.has_storm or _has_keyword(follower, "storm"),
             can_attack_field=True,
         )
         next_state.evolved_allies_this_turn += 1
+        next_state.manual_evolutions_this_turn += 1
         next_state.evolved_allies_this_match += 1
         rule = self.rules.get(follower.card_id, {})
         result = self._resolve_abilities(next_state, rule, "normal", trigger, source_uid=follower.unique_id, target_uid=target_uid)
@@ -333,18 +694,139 @@ class EventInterpreter:
             unsupported.add(f"{rule.get('support')}_rule:{follower.card_id}")
         return InterpreterResult(current, tuple(sorted(unsupported)), result.warnings + faith_result.warnings + super_faith.warnings + global_trigger.warnings)
 
+    def auto_evolve(self, state: LethalState, follower_uid: int, *, super_evolve: bool = False, target_uid: Any = None) -> InterpreterResult:
+        """Evolve a follower without spending EP/SEP.
+
+        Card text uses ``Evolve`` in two different contexts: a player action
+        spends an evolution point, while an effect such as Earth Rite or a
+        Fanfare says to evolve a follower directly.  The latter is a free
+        state transition but still emits the ordinary evolve/Faith/listener
+        events.  Keeping it separate prevents automatic evolutions from
+        consuming the player's limited EP/SEP pool.
+        """
+        index = next((i for i, f in enumerate(state.my_board) if f.unique_id == follower_uid), None)
+        if index is None:
+            return InterpreterResult(state, warnings=(f"follower {follower_uid} not found",))
+        follower = state.my_board[index]
+        if follower.is_evolved:
+            return InterpreterResult(state, warnings=(f"{follower.name} already evolved",))
+        next_state = state.clone()
+        self._invalidate_snapshot_legality(next_state)
+        delta = 3 if super_evolve else 2
+        trigger = "on_super_evolve" if super_evolve else "on_evolve"
+        next_state.my_board[index] = replace(
+            follower,
+            atk=follower.atk + delta,
+            hp=follower.hp + delta,
+            is_evolved=True,
+            is_super_evolved=super_evolve,
+            can_attack_leader=follower.has_storm or _has_keyword(follower, "storm"),
+            can_attack_field=True,
+        )
+        next_state.evolved_allies_this_turn += 1
+        next_state.evolved_allies_this_match += 1
+        rule = self.rules.get(follower.card_id, {})
+        result = self._resolve_abilities(next_state, rule, "normal", trigger, source_uid=follower_uid, target_uid=target_uid)
+        faith_result = self._resolve_faith_trigger(result.state, "on_ally_follower_evolve", source_uid=follower_uid)
+        current = faith_result.state
+        if super_evolve:
+            super_faith = self._resolve_faith_trigger(current, "on_ally_follower_super_evolve", source_uid=follower_uid)
+            current = super_faith.state
+        else:
+            super_faith = InterpreterResult(current)
+        global_trigger = self._resolve_board_trigger(
+            current,
+            "on_ally_follower_super_evolve" if super_evolve else "on_ally_follower_evolve",
+        )
+        current = global_trigger.state
+        unsupported = set(result.unsupported_ops) | set(faith_result.unsupported_ops) | set(super_faith.unsupported_ops) | set(global_trigger.unsupported_ops)
+        if rule.get("support") in ("partial", "unsupported"):
+            unsupported.add(f"{rule.get('support')}_rule:{follower.card_id}")
+        return InterpreterResult(
+            current,
+            tuple(sorted(unsupported)),
+            result.warnings + faith_result.warnings + super_faith.warnings + global_trigger.warnings,
+        )
+
+    def auto_evolve_branches(
+        self,
+        state: LethalState,
+        follower_uid: int,
+        *,
+        super_evolve: bool = False,
+        target_uid: Any = None,
+    ) -> list[StochasticBranch]:
+        """Branching counterpart of :meth:`auto_evolve`."""
+        index = next((i for i, f in enumerate(state.my_board) if f.unique_id == follower_uid), None)
+        if index is None:
+            return [StochasticBranch(1.0, state, warnings=(f"follower {follower_uid} not found",))]
+        follower = state.my_board[index]
+        if follower.is_evolved:
+            return [StochasticBranch(1.0, state, warnings=(f"{follower.name} already evolved",))]
+        current = state.clone()
+        self._invalidate_snapshot_legality(current)
+        delta = 3 if super_evolve else 2
+        trigger = "on_super_evolve" if super_evolve else "on_evolve"
+        current.my_board[index] = replace(
+            follower,
+            atk=follower.atk + delta,
+            hp=follower.hp + delta,
+            is_evolved=True,
+            is_super_evolved=super_evolve,
+            can_attack_leader=follower.has_storm,
+            can_attack_field=True,
+        )
+        current.evolved_allies_this_turn += 1
+        current.evolved_allies_this_match += 1
+        rule = self.rules.get(follower.card_id, {})
+        branches = self._resolve_abilities_branches(
+            current,
+            rule,
+            "normal",
+            trigger,
+            source_uid=follower_uid,
+            target_uid=target_uid,
+        )
+        branches = self._chain_faith_trigger_branches(branches, "on_ally_follower_evolve", source_uid=follower_uid)
+        if super_evolve:
+            branches = self._chain_faith_trigger_branches(branches, "on_ally_follower_super_evolve", source_uid=follower_uid)
+        branches = self._chain_board_trigger_branches(
+            branches,
+            "on_ally_follower_super_evolve" if super_evolve else "on_ally_follower_evolve",
+        )
+        if rule.get("support") in ("partial", "unsupported"):
+            branches = [
+                StochasticBranch(
+                    branch.probability,
+                    branch.state,
+                    tuple(sorted(set(branch.unsupported_ops) | {f"{rule.get('support')}_rule:{follower.card_id}"})),
+                    branch.warnings,
+                )
+                for branch in branches
+            ]
+        return self._merge_stochastic(branches)
+
     def evolve_branches(self, state: LethalState, attacker_uid: int, *, super_evolve: bool = False, target_uid: Any = None) -> list[StochasticBranch]:
         """Evolve and resolve an evolve trigger with random outcomes kept."""
         index = next((i for i, f in enumerate(state.my_board) if f.unique_id == attacker_uid), None)
         if index is None:
             return [StochasticBranch(1.0, state, warnings=(f"follower {attacker_uid} not found",))]
         follower = state.my_board[index]
+        if getattr(state, "legal_actions_known", False):
+            allowed = state.legal_super_evolve_uids if super_evolve else state.legal_evolve_uids
+            if attacker_uid not in allowed:
+                return [StochasticBranch(1.0, state, warnings=(f"Tracker forbids evolving follower {attacker_uid}",))]
+        if not self._evolution_unlocked(state, super_evolve=super_evolve):
+            return [StochasticBranch(1.0, state, warnings=(self._evolution_unlock_warning(state, super_evolve=super_evolve),))]
+        if getattr(state, "manual_evolutions_this_turn", 0) > 0:
+            return [StochasticBranch(1.0, state, warnings=("only one manual evolution is allowed per turn",))]
         if follower.is_evolved:
             return [StochasticBranch(1.0, state, warnings=(f"{follower.name} already evolved",))]
         points = state.sep if super_evolve else state.ep
         if points <= 0:
             return [StochasticBranch(1.0, state, warnings=("no evolve points",))]
         current = state.clone()
+        self._invalidate_snapshot_legality(current)
         if super_evolve:
             current.sep -= 1
             delta = 3
@@ -353,8 +835,9 @@ class EventInterpreter:
             current.ep -= 1
             delta = 2
             trigger = "on_evolve"
-        current.my_board[index] = replace(follower, atk=follower.atk + delta, hp=follower.hp + delta, is_evolved=True, is_super_evolved=super_evolve, can_attack_leader=follower.has_storm, can_attack_field=True)
+        current.my_board[index] = replace(follower, atk=follower.atk + delta, hp=follower.hp + delta, is_evolved=True, is_super_evolved=super_evolve, can_attack_leader=_has_keyword(follower, "storm"), can_attack_field=True)
         current.evolved_allies_this_turn += 1
+        current.manual_evolutions_this_turn += 1
         current.evolved_allies_this_match += 1
         rule = self.rules.get(follower.card_id, {})
         branches = self._resolve_abilities_branches(current, rule, "normal", trigger, source_uid=follower.unique_id, target_uid=target_uid)
@@ -375,12 +858,17 @@ class EventInterpreter:
         source = next((f for f in state.my_board if f.unique_id == source_uid), None)
         if source is None:
             return InterpreterResult(state, warnings=(f"engage source {source_uid} not found",))
+        if getattr(state, "legal_actions_known", False):
+            allowed = set(state.legal_actions.get("can_activation_field_cards", ())) | set(state.legal_actions.get("can_activation_field_cards_with_extra_pp", ()))
+            if source_uid not in allowed:
+                return InterpreterResult(state, warnings=(f"Tracker forbids Engage for {source_uid}",))
         rule = self.rules.get(source.card_id, {})
         selected = next((m for m in rule.get("modes", ()) if isinstance(m, Mapping) and m.get("kind") == "normal"), {})
         engage_cost = next((a.get("cost", 0) for a in selected.get("abilities", ()) if isinstance(a, Mapping) and a.get("trigger") == "on_engage"), 0)
         if state.pp < engage_cost:
             return InterpreterResult(state, warnings=(f"insufficient PP for Engage {source.name}",))
         working = state.clone()
+        self._invalidate_snapshot_legality(working)
         working.pp -= int(engage_cost or 0)
         result = self._resolve_abilities(working, rule, "normal", "on_engage", source_uid=source_uid, target_uid=target_uid)
         unsupported = set(result.unsupported_ops)
@@ -399,12 +887,17 @@ class EventInterpreter:
         source = next((f for f in state.my_board if f.unique_id == source_uid), None)
         if source is None:
             return [StochasticBranch(1.0, state, warnings=(f"engage source {source_uid} not found",))]
+        if getattr(state, "legal_actions_known", False):
+            allowed = set(state.legal_actions.get("can_activation_field_cards", ())) | set(state.legal_actions.get("can_activation_field_cards_with_extra_pp", ()))
+            if source_uid not in allowed:
+                return [StochasticBranch(1.0, state, warnings=(f"Tracker forbids Engage for {source_uid}",))]
         rule = self.rules.get(source.card_id, {})
         selected = next((m for m in rule.get("modes", ()) if isinstance(m, Mapping) and m.get("kind") == "normal"), {})
         engage_cost = next((a.get("cost", 0) for a in selected.get("abilities", ()) if isinstance(a, Mapping) and a.get("trigger") == "on_engage"), 0)
         if self._available_pp(state) < int(engage_cost or 0):
             return [StochasticBranch(1.0, state, warnings=(f"insufficient PP for Engage {source.name}",))]
         working = state.clone()
+        self._invalidate_snapshot_legality(working)
         if not self._pay_pp(working, int(engage_cost or 0)):
             return [StochasticBranch(1.0, state, warnings=(f"insufficient PP for Engage {source.name}",))]
         branches = self._resolve_abilities_branches(working, rule, "normal", "on_engage", source_uid=source_uid, target_uid=target_uid)
@@ -428,12 +921,18 @@ class EventInterpreter:
         trigger = "on_opponent_turn_end" if opponent else "on_turn_end"
         result = self._resolve_board_trigger(state, trigger)
         current = result.state.clone()
+        self._invalidate_snapshot_legality(current)
         unsupported = set(result.unsupported_ops)
         warnings = list(result.warnings)
         crest_result = self._resolve_crest_trigger(current, trigger)
         current = crest_result.state
         unsupported.update(crest_result.unsupported_ops)
         warnings.extend(crest_result.warnings)
+        if not opponent:
+            invoked = self._resolve_deck_invocations(current, trigger)
+            current = invoked.state
+            unsupported.update(invoked.unsupported_ops)
+            warnings.extend(invoked.warnings)
         expired: list[dict[str, Any]] = []
         remaining: list[dict[str, Any]] = []
         for item in current.crest_instances:
@@ -451,11 +950,35 @@ class EventInterpreter:
         elif expired or current.active_crests:
             expired_ids = {int(item.get("card_id", 0)) for item in expired}
             current.active_crests = [cid for cid in current.active_crests if cid not in expired_ids]
+        if opponent and current.enemy_crest_instances:
+            enemy_remaining: list[dict[str, Any]] = []
+            enemy_expired_ids: set[int] = set()
+            for item in current.enemy_crest_instances:
+                item = dict(item)
+                countdown = item.get("countdown")
+                if isinstance(countdown, int) and countdown >= 0:
+                    item["countdown"] = max(0, countdown - 1)
+                if item.get("countdown") == 0:
+                    enemy_expired_ids.add(int(item.get("card_id", 0) or 0))
+                else:
+                    enemy_remaining.append(item)
+            current.enemy_crest_instances = enemy_remaining
+            if current.enemy_crest_instances:
+                current.enemy_active_crests = [int(item.get("card_id", 0)) for item in current.enemy_crest_instances]
+            elif enemy_expired_ids or current.enemy_active_crests:
+                current.enemy_active_crests = [cid for cid in current.enemy_active_crests if cid not in enemy_expired_ids]
         # ``attacked_with_follower_this_turn`` is scoped to the turn boundary;
         # it is observable while resolving the boundary and then cleared for
         # the next turn.
         current.attacked_with_follower_this_turn = False
         return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+
+    def start_turn(self, state: LethalState) -> InterpreterResult:
+        """Resolve start-of-turn listeners, including known deck Invokes."""
+        result = self._resolve_board_trigger(state, "on_turn_start")
+        invoked = self._resolve_deck_invocations(result.state, "on_turn_start")
+        unsupported = tuple(sorted(set(result.unsupported_ops) | set(invoked.unsupported_ops)))
+        return InterpreterResult(invoked.state, unsupported, result.warnings + invoked.warnings)
 
     # Friendly alias used by callers that model the game event name.
     advance_turn_end = end_turn
@@ -574,17 +1097,37 @@ class EventInterpreter:
             output.append(StochasticBranch(branch.probability, result.state, tuple(sorted(set(branch.unsupported_ops) | set(result.unsupported_ops))), tuple(branch.warnings) + tuple(result.warnings)))
         return self._merge_stochastic(output)
 
-    def _resolve_abilities(self, state: LethalState, rule: Mapping[str, Any], mode: str, trigger: str, *, source_uid: int, target_uid: Any = None, choice: Any = None) -> InterpreterResult:
+    def _resolve_abilities(self, state: LethalState, rule: Mapping[str, Any], mode: str, trigger: str, *, source_uid: int, target_uid: Any = None, choice: Any = None, event_uid: int | None = None) -> InterpreterResult:
         modes = rule.get("modes", ()) if isinstance(rule, Mapping) else ()
         selected = next((item for item in modes if isinstance(item, Mapping) and item.get("kind") == mode), None)
         if selected is None and mode == "normal":
             selected = next((item for item in modes if isinstance(item, Mapping) and item.get("kind") == "normal"), None)
-        abilities = selected.get("abilities", ()) if isinstance(selected, Mapping) else ()
+        abilities = list(selected.get("abilities", ())) if isinstance(selected, Mapping) else []
+        # A status granted to a particular entity is not part of that card's
+        # printed rule.  Dispatch it alongside the printed abilities so
+        # delayed copies and persistent listeners survive exact-copy state.
+        source_follower = next((f for f in state.my_board if f.unique_id == source_uid), None)
+        # ``remove_abilities`` is a stateful effect.  Once the source entity
+        # has been stripped, its printed and granted listeners must not fire
+        # on later evolve/attack/turn events even though the catalog rule is
+        # still available by card id.
+        if source_follower is not None and source_follower.abilities_removed:
+            return InterpreterResult(state)
+        if source_follower is not None:
+            abilities.extend(item for item in source_follower.granted_abilities if isinstance(item, Mapping))
         unsupported: set[str] = set()
         warnings: list[str] = []
         current = state
         for ability in abilities:
             if not isinstance(ability, Mapping) or ability.get("trigger") != trigger:
+                continue
+            trigger_filter = ability.get("trigger_filter")
+            if event_uid is None:
+                # An unfiltered board event is dispatched once.  Filtered
+                # listeners wait for the event-specific pass below.
+                if isinstance(trigger_filter, Mapping):
+                    continue
+            elif not isinstance(trigger_filter, Mapping) or not self._trigger_filter_matches(current, trigger_filter, event_uid):
                 continue
             if self._contains_op(ability.get("effects", ()), "mode_choice") and current.super_skybound_art > 0 and self._mode_has_activate_all(rule, mode):
                 # Super Skybound Art replaces the ordinary “choose one”
@@ -603,7 +1146,12 @@ class EventInterpreter:
             expanded_effects, replicate_ops = self._expand_replicated_effects(
                 current, rule, mode, ability, source_trigger=trigger
             )
-            current, ops, warns = self._effects(current, expanded_effects, source_uid, target_uid, choice=effective_choice)
+            # For a filtered global listener, “it/trigger_source” denotes the
+            # entity that entered the field, not the listener card carrying
+            # the ability.  Keep ``source_uid`` for granted-ability lookup but
+            # use the event entity as the effect source.
+            effect_source_uid = event_uid if event_uid is not None else source_uid
+            current, ops, warns = self._effects(current, expanded_effects, effect_source_uid, target_uid, choice=effective_choice)
             ops.update(replicate_ops)
             unsupported.update(ops)
             warnings.extend(warns)
@@ -711,6 +1259,8 @@ class EventInterpreter:
                 return True
             if EventInterpreter._contains_op(effect.get("effects", ()), op_name) or EventInterpreter._contains_op(effect.get("else_effects", ()), op_name):
                 return True
+            if any(EventInterpreter._contains_op(item.get("effects", ()), op_name) for item in effect.get("steps", ()) if isinstance(item, Mapping)):
+                return True
             if any(EventInterpreter._contains_op(item.get("effects", ()), op_name) for item in effect.get("choices", ()) if isinstance(item, Mapping)):
                 return True
         return False
@@ -751,6 +1301,47 @@ class EventInterpreter:
         if not isinstance(selected, Mapping):
             return False
         return any(EventInterpreter._contains_op(ability.get("effects", ()), "mode_choice") for ability in selected.get("abilities", ()) if isinstance(ability, Mapping))
+
+    @staticmethod
+    def _mode_selection_count(rule: Mapping[str, Any], mode: str, choice: Any = None) -> int:
+        """Return how many Mode selections one play represents.
+
+        ``mode_choice.selection_count`` is normally a small integer in the
+        compiled rule.  A direct caller may pass a tuple for a multi-select
+        action, so use its length as a conservative fallback while still
+        honoring the rule-declared count when present.
+        """
+        selected = next(
+            (item for item in rule.get("modes", ())
+             if isinstance(item, Mapping) and item.get("kind") == mode),
+            None,
+        )
+
+        def find(effects: Any) -> int | None:
+            for effect in effects if isinstance(effects, (list, tuple)) else ():
+                if not isinstance(effect, Mapping):
+                    continue
+                if effect.get("op") == "mode_choice":
+                    raw = effect.get("selection_count", 1)
+                    try:
+                        return max(1, int(raw))
+                    except (TypeError, ValueError):
+                        return max(1, len(choice) if isinstance(choice, (list, tuple)) else 1)
+                nested = find(effect.get("effects", ()))
+                if nested is not None:
+                    return nested
+                nested = find(effect.get("else_effects", ()))
+                if nested is not None:
+                    return nested
+            return None
+
+        if isinstance(selected, Mapping):
+            for ability in selected.get("abilities", ()):
+                if isinstance(ability, Mapping):
+                    result = find(ability.get("effects", ()))
+                    if result is not None:
+                        return result
+        return max(1, len(choice) if isinstance(choice, (list, tuple)) else 1)
 
     def _resource_preflight(self, state: LethalState, rule: Mapping[str, Any], mode: str, *, source_uid: int, choice: Any = None) -> tuple[str, int, int] | None:
         """Check unconditional/selected resource payments before a play.
@@ -882,18 +1473,24 @@ class EventInterpreter:
                     if failure:
                         return current, failure
                 elif op == "mode_choice":
-                    selected_choice = None
-                    if choice is not None:
-                        selected_choice = choice[0] if isinstance(choice, (list, tuple)) and choice else choice
-                        if isinstance(selected_choice, int):
-                            choices = effect.get("choices", ())
-                            selected_choice = choices[selected_choice] if 0 <= selected_choice < len(choices) else None
-                        if not isinstance(selected_choice, Mapping):
-                            selected_choice = next((item for item in effect.get("choices", ()) if isinstance(item, Mapping) and str(item.get("label")) == str(selected_choice)), None)
-                    if isinstance(selected_choice, Mapping):
-                        current, failure = visit(selected_choice.get("effects", ()), current)
-                        if failure:
-                            return current, failure
+                    choices = effect.get("choices", ())
+                    if isinstance(choices, (list, tuple)) and choice is not None:
+                        selected_values = list(choice) if isinstance(choice, (list, tuple)) and not all(isinstance(item, Mapping) for item in choice) else [choice]
+                        selected_choices: list[Mapping[str, Any]] = []
+                        for selected_value in selected_values:
+                            selected_choice = None
+                            if isinstance(selected_value, Mapping):
+                                selected_choice = selected_value
+                            elif isinstance(selected_value, int) and 0 <= selected_value < len(choices):
+                                selected_choice = choices[selected_value]
+                            else:
+                                selected_choice = next((item for item in choices if isinstance(item, Mapping) and str(item.get("label")) == str(selected_value)), None)
+                            if isinstance(selected_choice, Mapping):
+                                selected_choices.append(selected_choice)
+                        for selected_choice in selected_choices:
+                            current, failure = visit(selected_choice.get("effects", ()), current)
+                            if failure:
+                                return current, failure
                 elif op == "activate_all_mode_choices":
                     # Super Skybound Art executes every numbered Mode.  Use
                     # the explicit payload when supplied; for a direct play
@@ -924,8 +1521,20 @@ class EventInterpreter:
                 return failure
         return None
 
-    def _resolve_board_trigger(self, state: LethalState, trigger: str) -> InterpreterResult:
-        """Resolve a trigger for each allied follower currently on board."""
+    def _trigger_filter_matches(self, state: LethalState, trigger_filter: Mapping[str, Any], event_uid: int) -> bool:
+        """Check a filtered board event against the entering entity."""
+        follower = next((item for item in state.my_board if item.unique_id == event_uid), None)
+        if follower is None:
+            return False
+        return self._matches_follower_filters(follower, "ally", trigger_filter)
+
+    def _resolve_board_trigger(self, state: LethalState, trigger: str, *, event_uid: int | None = None) -> InterpreterResult:
+        """Resolve a trigger for allied followers currently on board.
+
+        With ``event_uid`` set, only abilities carrying a matching
+        ``trigger_filter`` run.  The unfiltered pass remains the historical
+        “one event observed by every listener” behavior.
+        """
         current = state
         unsupported: set[str] = set()
         warnings: list[str] = []
@@ -938,7 +1547,7 @@ class EventInterpreter:
             if follower.abilities_removed:
                 continue
             rule = self.rules.get(follower.card_id, {})
-            result = self._resolve_abilities(current, rule, "normal", trigger, source_uid=source_uid)
+            result = self._resolve_abilities(current, rule, "normal", trigger, source_uid=source_uid, event_uid=event_uid)
             current = result.state
             unsupported.update(result.unsupported_ops)
             warnings.extend(result.warnings)
@@ -997,6 +1606,7 @@ class EventInterpreter:
             "attacked_with_follower_this_turn": state.attacked_with_follower_this_turn,
             "attacked_with_follower_last_turn": False,
             "card_cost": state.last_played_card_cost,
+            "last_played_mode": state.last_played_mode,
             "selected_card_type": state.last_played_card_type,
             "card_type": state.last_played_card_type,
             "tribe": state.last_played_tribes,
@@ -1009,7 +1619,7 @@ class EventInterpreter:
         elif state_name == "ally_artifact_count":
             values["ally_artifact_count"] = sum(1 for c in state.hand if any(str(t).casefold() == "artifact" for t in c.tribes))
         elif state_name == "played_base_cost_set":
-            values["played_base_cost_set"] = ()
+            values["played_base_cost_set"] = tuple(sorted(set(int(item) for item in getattr(state, "played_base_costs", ()))))
         if state_name not in values:
             return None
         left, right, cmp = values[state_name], condition.get("value"), condition.get("cmp")
@@ -1025,10 +1635,757 @@ class EventInterpreter:
         except TypeError:
             return None
 
+    def _progressive_effect(self, state: LethalState, effect: Mapping[str, Any], source_uid: int, target_uid: Any = None, *, choice: Any = None) -> tuple[LethalState, set[str], list[str]]:
+        """Resolve one step of an entity-owned progressive sequence.
+
+        A progressive sequence is not a loop: each trigger consumes exactly
+        one step and the next step is stored on the source entity.  This is
+        what lets two copies of a Countdown amulet advance independently.
+        """
+        steps = effect.get("steps") if isinstance(effect.get("steps"), (list, tuple)) else ()
+        unsupported: set[str] = set()
+        warnings: list[str] = []
+        if not steps:
+            unsupported.add("progressive_sequence")
+            return state, unsupported, warnings
+        source_side = None
+        source_index = None
+        for side, board in (("ally", state.my_board), ("enemy", state.enemy_board)):
+            source_index = next((i for i, item in enumerate(board) if item.unique_id == source_uid), None)
+            if source_index is not None:
+                source_side = side
+                break
+        if source_side is None or source_index is None:
+            unsupported.add("progressive_source")
+            return state, unsupported, warnings
+        source = (state.my_board if source_side == "ally" else state.enemy_board)[source_index]
+        step_index = max(0, int(getattr(source, "progressive_sequence_index", 0)))
+        if step_index >= len(steps):
+            # Once the sequence is exhausted, later triggers are a legal no-op.
+            return state, unsupported, warnings
+        step = steps[step_index]
+        nested = step.get("effects", ()) if isinstance(step, Mapping) else ()
+        current = state.clone()
+        board = current.my_board if source_side == "ally" else current.enemy_board
+        board[source_index] = replace(source, progressive_sequence_index=step_index + 1)
+        current, nested_ops, nested_warns = self._effects(current, nested, source_uid, target_uid, choice=choice)
+        unsupported.update(nested_ops)
+        warnings.extend(nested_warns)
+        return current, unsupported, warnings
+
+    def _progressive_effect_branches(self, state: LethalState, effect: Mapping[str, Any], source_uid: int, target_uid: Any = None, *, choice: Any = None) -> list[StochasticBranch]:
+        steps = effect.get("steps") if isinstance(effect.get("steps"), (list, tuple)) else ()
+        if not steps:
+            return [StochasticBranch(1.0, state, ("progressive_sequence",))]
+        source_side = None
+        source_index = None
+        for side, board in (("ally", state.my_board), ("enemy", state.enemy_board)):
+            source_index = next((i for i, item in enumerate(board) if item.unique_id == source_uid), None)
+            if source_index is not None:
+                source_side = side
+                break
+        if source_side is None or source_index is None:
+            return [StochasticBranch(1.0, state, ("progressive_source",))]
+        source = (state.my_board if source_side == "ally" else state.enemy_board)[source_index]
+        step_index = max(0, int(getattr(source, "progressive_sequence_index", 0)))
+        if step_index >= len(steps):
+            return [StochasticBranch(1.0, state)]
+        step = steps[step_index]
+        nested = step.get("effects", ()) if isinstance(step, Mapping) else ()
+        current = state.clone()
+        board = current.my_board if source_side == "ally" else current.enemy_board
+        board[source_index] = replace(source, progressive_sequence_index=step_index + 1)
+        return self._effects_branches(current, nested, source_uid, target_uid, choice=choice)
+
+    @staticmethod
+    def _runtime_previous_modifier(base_effect: Mapping[str, Any], modifier: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Apply a raw ``modify_previous_effect`` relation at runtime.
+
+        The compiler resolves ordinary ``instead`` text ahead of time.  This
+        fallback keeps manually authored rules executable when the relation is
+        adjacent to its base effect (and, importantly, does not apply both the
+        original and replacement operation).
+        """
+        result = dict(base_effect)
+        field = modifier.get("field")
+        value = modifier.get("value")
+        if value is None:
+            return None
+        if field in ("amount", "count"):
+            result[str(field)] = value
+            return result
+        if field in ("selection_count", "target_count"):
+            target = dict(result.get("target", {})) if isinstance(result.get("target"), Mapping) else None
+            if target is None:
+                return None
+            target["count"] = value
+            result["target"] = target
+            return result
+        if field == "target":
+            if not isinstance(value, Mapping) or "scope" not in value:
+                return None
+            result["target"] = dict(value)
+            return result
+        if field == "repeat_count":
+            if result.get("op") == "repeat":
+                result["count"] = value
+            else:
+                result = {"op": "repeat", "count": value, "effects": [result]}
+            return result
+        return None
+
+    def _invoke_effect(
+        self,
+        state: LethalState,
+        effect: Mapping[str, Any],
+        source_uid: int,
+        target_uid: Any = None,
+        *,
+        choice: Any = None,
+        _single: bool = False,
+    ) -> InterpreterResult:
+        """Invoke one follower from hand/deck without spending PP.
+
+        Invocation is a summon event, not a normal play: no Play Count/PP is
+        consumed.  A card-specific ``on_invoke`` listener is preferred; legacy
+        catalog text that places the sentence under Fanfare falls back to that
+        trigger, which matches the current generated catalog.
+        """
+        current = state
+        unsupported: set[str] = set()
+        warnings: list[str] = []
+        # ``count`` is useful for manually-authored rules such as “invoke two
+        # copies”.  Keep the one-copy implementation below as the atomic unit
+        # so every copy gets a fresh UID and its own Fanfare/summon pipeline.
+        # The public deterministic API deliberately does not guess a random
+        # target; callers that need a distribution use ``_invoke_effect_branches``.
+        if not _single:
+            count = self._resolve_value(state, effect.get("count", 1), source_uid)
+            if count is None:
+                return InterpreterResult(state, unsupported_ops=("invoke_count",))
+            count = max(0, int(count))
+            if count == 0:
+                return InterpreterResult(state)
+            working = state
+            all_unsupported: set[str] = set()
+            all_warnings: list[str] = []
+            one = dict(effect)
+            one["count"] = 1
+            for _ in range(count):
+                result = self._invoke_effect(working, one, source_uid, target_uid, choice=choice, _single=True)
+                working = result.state
+                all_unsupported.update(result.unsupported_ops)
+                all_warnings.extend(result.warnings)
+                # A failed/unknown invocation is not a reason to invent later
+                # copies.  Continue only when the atomic operation actually
+                # created a follower or consumed a hand/deck source.
+                if any(str(item).startswith("invoke_") for item in result.unsupported_ops):
+                    # ``result.state is state`` is not a reliable no-op test:
+                    # invoke may clone a state before discovering an unknown
+                    # pool.  Stop the copy loop whenever the atomic operation
+                    # reported an invocation gap, otherwise a hand/deck
+                    # shortage would be reported once per requested copy.
+                    break
+            return InterpreterResult(working, tuple(sorted(all_unsupported)), tuple(all_warnings))
+        target = effect.get("target") if isinstance(effect.get("target"), Mapping) else {"scope": "self"}
+        selector = effect.get("resource_selector") if isinstance(effect.get("resource_selector"), Mapping) else {}
+        from_zone = str(effect.get("from_zone") or selector.get("zone") or "").casefold()
+        if from_zone in ("your_hand", "ally_hand"):
+            from_zone = "hand"
+        if from_zone in ("your_deck", "ally_deck"):
+            from_zone = "deck"
+        target_filters = target.get("filters") if isinstance(target.get("filters"), Mapping) else {}
+        selector_filters = selector.get("filters") if isinstance(selector.get("filters"), Mapping) else {}
+        filters = dict(selector_filters)
+        filters.update(target_filters)
+        target_scope = str(target.get("scope") or "").casefold()
+        target_selection = str(target.get("selection") or "chosen").casefold()
+        source_hand_entity = next((card for card in current.hand if card.unique_id == source_uid), None)
+        if not from_zone and source_hand_entity is not None and target_scope in ("self", "trigger_source"):
+            # Hand listeners (On Draw/On Spellboost/temporary hand
+            # abilities) can invoke their own card.  This is distinct from a
+            # board follower's “Invoke this card” listener, which defaults to
+            # a deck lookup below.
+            from_zone = "hand"
+        card_id = effect.get("card_id", effect.get("source_card_id"))
+        try:
+            card_id = int(card_id) if card_id is not None else None
+        except (TypeError, ValueError):
+            card_id = None
+        # Resolve an explicitly selected hand entity before falling back to the
+        # board source.  Without this ordering an effect on a board follower
+        # that says “invoke a card in your hand” would incorrectly invoke the
+        # source follower's own card from the deck.
+        requested_uids: set[int] = set()
+        if isinstance(target_uid, Mapping):
+            requested_uids = {int(key) for key, value in target_uid.items() if value}
+        elif isinstance(target_uid, (list, tuple, set)):
+            requested_uids = {int(value) for value in target_uid}
+        elif target_uid is not None:
+            try:
+                requested_uids = {int(target_uid)}
+            except (TypeError, ValueError):
+                requested_uids = set()
+
+        def hand_matches(card: LethalHandCard) -> bool:
+            if card_id is not None and card.card_id != card_id:
+                return False
+            wanted_type = filters.get("card_type")
+            if wanted_type:
+                values = wanted_type if isinstance(wanted_type, (list, tuple, set)) else [wanted_type]
+                actual = {1: "follower", 2: "amulet", 3: "countdown_amulet", 4: "spell"}.get(card.type, card.type)
+                if actual not in values and not (actual == "countdown_amulet" and "amulet" in values):
+                    return False
+            wanted_tribe = filters.get("tribe")
+            if wanted_tribe:
+                values = wanted_tribe if isinstance(wanted_tribe, (list, tuple, set)) else [wanted_tribe]
+                if not any(str(value).casefold() in {str(item).casefold() for item in card.tribes} for value in values):
+                    return False
+            return True
+
+        hand_index: int | None = None
+        hand_target_requested = from_zone == "hand" or target_scope in ("hand", "ally_hand") or str(filters.get("zone", "")).casefold() in ("hand", "ally_hand")
+        if requested_uids:
+            hand_index = next((i for i, card in enumerate(current.hand) if card.unique_id in requested_uids and hand_matches(card)), None)
+            if hand_index is not None:
+                from_zone = "hand"
+                card_id = current.hand[hand_index].card_id
+        if hand_index is None and hand_target_requested:
+            if source_uid and target_scope in ("self", "trigger_source"):
+                hand_index = next((i for i, card in enumerate(current.hand) if card.unique_id == source_uid and hand_matches(card)), None)
+            if hand_index is None:
+                hand_index = next((i for i, card in enumerate(current.hand) if hand_matches(card)), None)
+            if hand_index is not None:
+                from_zone = "hand"
+                card_id = current.hand[hand_index].card_id
+            elif from_zone == "hand" or target_scope == "hand":
+                unsupported.add("invoke_hand_target")
+                return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+
+        board_source = next((item for item in current.my_board if item.unique_id == source_uid), None)
+        if card_id is None and hand_index is not None:
+            card_id = current.hand[hand_index].card_id
+        if card_id is None and board_source is not None:
+            card_id = board_source.card_id
+        if card_id is None and filters.get("card_id") is not None:
+            try:
+                card_id = int(filters["card_id"])
+            except (TypeError, ValueError):
+                card_id = None
+        if card_id is None:
+            unsupported.add("invoke_card")
+            return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+        if target_selection == "random":
+            unsupported.add("random_invoke")
+        # If no zone was supplied, an explicit hand target selects hand;
+        # otherwise a card-id/source invocation is a deck lookup.  Keeping the
+        # default explicit also lets a board listener invoke a known card id
+        # instead of silently treating the source follower as already invoked.
+        if not from_zone:
+            from_zone = "hand" if hand_index is not None else "deck"
+        # A source already on the field has already been invoked.  This guard
+        # prevents a delayed listener from recursively summoning itself.
+        if board_source is not None and target_scope in ("self", "trigger_source") and from_zone not in ("deck", "hand"):
+            return InterpreterResult(current)
+        from_hand = hand_index is not None and from_zone != "deck"
+        if len(current.my_board) >= 5:
+            warnings.append("ally field is full; invoke skipped")
+            return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+        if from_hand:
+            current = current.clone()
+            current.hand.pop(hand_index)
+        else:
+            known_count = int(current.deck_distribution.get(card_id, 0) or 0)
+            if known_count <= 0:
+                if current.deck_replacement and current.total_deck_count > 0:
+                    unsupported.add("invoke_replaced_deck")
+                elif current.total_deck_count > 0:
+                    unsupported.add("invoke_unknown_pool")
+                else:
+                    warnings.append(f"card {card_id} is not available to invoke")
+                return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+            current = current.clone()
+            current.deck_distribution[card_id] = max(0, known_count - 1)
+            current.total_deck_count = max(0, int(current.total_deck_count) - 1)
+        uid = self._next_instance_uid(current)
+        follower = self._follower_for_card(card_id, uid)
+        if follower is None:
+            unsupported.add(f"invoke_card:{card_id}")
+            return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+        current.my_board.append(follower)
+        current.last_created_uid = uid
+        rule = self.rules.get(card_id, {})
+        has_invoke_ability = any(
+            isinstance(ability, Mapping) and ability.get("trigger") == "on_invoke"
+            for mode in rule.get("modes", ()) if isinstance(mode, Mapping)
+            for ability in mode.get("abilities", ()) if isinstance(mode.get("abilities"), (list, tuple))
+        )
+        if has_invoke_ability:
+            triggered = self._resolve_abilities(current, rule, "normal", "on_invoke", source_uid=uid, target_uid=target_uid, choice=choice)
+        else:
+            triggered = self._resolve_abilities(current, rule, "normal", "on_fanfare", source_uid=uid, target_uid=target_uid, choice=choice)
+        current = triggered.state
+        unsupported.update(triggered.unsupported_ops)
+        warnings.extend(triggered.warnings)
+        summoned = self._resolve_abilities(current, rule, "normal", "on_summon", source_uid=uid, target_uid=target_uid, choice=choice)
+        current = summoned.state
+        unsupported.update(summoned.unsupported_ops)
+        warnings.extend(summoned.warnings)
+        if any(item.unique_id == uid for item in current.my_board):
+            board_event = self._resolve_board_trigger(current, "on_ally_follower_summon")
+            current = board_event.state
+            unsupported.update(board_event.unsupported_ops)
+            warnings.extend(board_event.warnings)
+            filtered = self._resolve_board_trigger(current, "on_ally_follower_summon", event_uid=uid)
+            current = filtered.state
+            unsupported.update(filtered.unsupported_ops)
+            warnings.extend(filtered.warnings)
+        if rule.get("support") in ("partial", "unsupported"):
+            unsupported.add(f"{rule.get('support')}_rule:{card_id}")
+        return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+
+    def _invoke_card_branches(
+        self,
+        state: LethalState,
+        effect: Mapping[str, Any],
+        source_uid: int,
+        target_uid: Any = None,
+        *,
+        choice: Any = None,
+    ) -> list[StochasticBranch]:
+        """Invoke one *known* card and preserve random Fanfare outcomes.
+
+        ``_invoke_effect`` is the deterministic primitive used by direct
+        callers.  The branch API must not route an invoked card's Fanfare
+        through that primitive, because a Fanfare may itself contain random
+        damage, draws, or deck selectors.  This helper performs the same
+        hand/deck removal and summon boundary, then dispatches all nested
+        abilities with ``_resolve_abilities_branches``.
+        """
+        target = effect.get("target") if isinstance(effect.get("target"), Mapping) else {"scope": "self"}
+        selector = effect.get("resource_selector") if isinstance(effect.get("resource_selector"), Mapping) else {}
+        from_zone = str(effect.get("from_zone") or selector.get("zone") or "").casefold()
+        if from_zone in ("your_hand", "ally_hand"):
+            from_zone = "hand"
+        if from_zone in ("your_deck", "ally_deck"):
+            from_zone = "deck"
+        if not from_zone:
+            from_zone = "hand" if any(card.unique_id == source_uid for card in state.hand) else "deck"
+        card_id = effect.get("card_id", effect.get("source_card_id"))
+        try:
+            card_id = int(card_id) if card_id is not None else None
+        except (TypeError, ValueError):
+            card_id = None
+        if card_id is None and str(target.get("scope") or "").casefold() in ("self", "trigger_source"):
+            source_entity = next((item for item in state.my_board if item.unique_id == source_uid), None)
+            if source_entity is None:
+                source_entity = next((item for item in state.enemy_board if item.unique_id == source_uid), None)
+            if source_entity is not None:
+                card_id = source_entity.card_id
+        if card_id is None:
+            return [StochasticBranch(1.0, state, ("invoke_card",))]
+
+        unsupported: set[str] = set()
+        warnings: list[str] = []
+        current = state
+        hand_index: int | None = None
+        if from_zone == "hand":
+            requested: set[int] = set()
+            if isinstance(target_uid, Mapping):
+                requested = {int(key) for key, value in target_uid.items() if value}
+            elif isinstance(target_uid, (list, tuple, set)):
+                requested = {int(value) for value in target_uid}
+            elif target_uid is not None:
+                try:
+                    requested = {int(target_uid)}
+                except (TypeError, ValueError):
+                    requested = set()
+            filters = {}
+            if isinstance(selector.get("filters"), Mapping):
+                filters.update(selector["filters"])
+            if isinstance(target.get("filters"), Mapping):
+                filters.update(target["filters"])
+            candidates = [
+                (index, card)
+                for index, card in enumerate(current.hand)
+                if (card_id is None or card.card_id == card_id)
+                and (not requested or card.unique_id in requested)
+                and self._hand_card_matches_filters(card, filters)
+            ]
+            if not candidates:
+                return [StochasticBranch(1.0, state, ("invoke_hand_target",))]
+            hand_index, selected_card = candidates[0]
+            card_id = selected_card.card_id
+        elif current.deck_replacement:
+            return [StochasticBranch(1.0, state, ("invoke_replaced_deck",))]
+        elif int(current.deck_distribution.get(card_id, 0) or 0) <= 0:
+            if int(current.total_deck_count) > 0:
+                return [StochasticBranch(1.0, state, ("invoke_unknown_pool",))]
+            return [StochasticBranch(1.0, state, warnings=(f"card {card_id} is not available to invoke",))]
+
+        if len(current.my_board) >= 5:
+            return [StochasticBranch(1.0, state, warnings=("ally field is full; invoke skipped",))]
+        current = current.clone()
+        if hand_index is not None:
+            current.hand.pop(hand_index)
+        else:
+            current.deck_distribution[card_id] = max(0, int(current.deck_distribution.get(card_id, 0) or 0) - 1)
+            current.total_deck_count = max(0, int(current.total_deck_count) - 1)
+        uid = self._next_instance_uid(current)
+        follower = self._follower_for_card(card_id, uid)
+        if follower is None:
+            return [StochasticBranch(1.0, current, (f"invoke_card:{card_id}",))]
+        before_uids = {item.unique_id for item in current.my_board}
+        current.my_board.append(follower)
+        current.last_created_uid = uid
+        rule = self.rules.get(card_id, {})
+        has_invoke_ability = any(
+            isinstance(ability, Mapping) and ability.get("trigger") == "on_invoke"
+            for mode in rule.get("modes", ()) if isinstance(mode, Mapping)
+            for ability in mode.get("abilities", ()) if isinstance(mode.get("abilities"), (list, tuple))
+        )
+        # A hand entity's target UID was consumed to select the source card;
+        # it must not leak into the invoked card's self-targeting Fanfare.
+        ability_target_uid = None if hand_index is not None else target_uid
+        trigger = "on_invoke" if has_invoke_ability else "on_fanfare"
+        branches = self._resolve_abilities_branches(
+            current,
+            rule,
+            "normal",
+            trigger,
+            source_uid=uid,
+            target_uid=ability_target_uid,
+            choice=choice,
+        )
+        output: list[StochasticBranch] = []
+        for branch in branches:
+            summoned = self._resolve_abilities_branches(
+                branch.state,
+                rule,
+                "normal",
+                "on_summon",
+                source_uid=uid,
+                target_uid=ability_target_uid,
+                choice=choice,
+                probability=branch.probability,
+                inherited_unsupported=branch.unsupported_ops,
+                inherited_warnings=branch.warnings,
+            )
+            for summoned_branch in summoned:
+                if any(item.unique_id == uid for item in summoned_branch.state.my_board):
+                    output.extend(
+                        self._chain_board_trigger_branches(
+                            [summoned_branch],
+                            "on_ally_follower_summon",
+                            entered_before=before_uids,
+                        )
+                    )
+                else:
+                    output.append(summoned_branch)
+        # Include the rule's static keyword contract just as ``play_branches``
+        # does.  The invoked follower is still a normal entity and an unknown
+        # static keyword must never be treated as a confirmed lethal line.
+        if any(_normalize_keyword(keyword) not in _IMPLEMENTED_KEYWORDS for keyword in rule.get("static_keywords", ()) if isinstance(rule, Mapping)):
+            output = [
+                StochasticBranch(
+                    item.probability,
+                    item.state,
+                    tuple(sorted(set(item.unsupported_ops) | {f"static_keyword:{keyword}" for keyword in rule.get("static_keywords", ()) if _normalize_keyword(keyword) not in _IMPLEMENTED_KEYWORDS})),
+                    item.warnings,
+                )
+                for item in output
+            ]
+        if rule.get("support") in ("partial", "unsupported"):
+            output = [
+                StochasticBranch(item.probability, item.state, tuple(sorted(set(item.unsupported_ops) | {f"{rule.get('support')}_rule:{card_id}"})), item.warnings)
+                for item in output
+            ]
+        return self._merge_stochastic(output or [StochasticBranch(1.0, current, tuple(sorted(unsupported)), tuple(warnings))])
+
+    def _invoke_effect_branches(
+        self,
+        state: LethalState,
+        effect: Mapping[str, Any],
+        source_uid: int,
+        target_uid: Any = None,
+        *,
+        choice: Any = None,
+    ) -> list[StochasticBranch]:
+        """Expand random/selector based Invoke effects.
+
+        ``invoke`` is often printed as “invoke this card”, which is
+        deterministic once the card is known.  A few rules instead invoke a
+        random card from a hand/deck selector.  The latter must use the same
+        multiplicity-weighted public-pool contract as Draw/Summon; any hidden
+        or replacement-deck mass remains an explicit incomplete branch.
+        """
+        count = self._resolve_value(state, effect.get("count", 1), source_uid)
+        if count is None:
+            return [StochasticBranch(1.0, state, ("invoke_count",))]
+        count = max(0, int(count))
+        if count == 0:
+            return [StochasticBranch(1.0, state)]
+        one = dict(effect)
+        one["count"] = 1
+        current = [StochasticBranch(1.0, state)]
+        for _ in range(count):
+            output: list[StochasticBranch] = []
+            for branch in current:
+                target = one.get("target") if isinstance(one.get("target"), Mapping) else {}
+                selector = one.get("resource_selector") if isinstance(one.get("resource_selector"), Mapping) else {}
+                target_filters = target.get("filters") if isinstance(target.get("filters"), Mapping) else {}
+                selector_filters = selector.get("filters") if isinstance(selector.get("filters"), Mapping) else {}
+                filters = dict(selector_filters)
+                filters.update(target_filters)
+                from_zone = str(one.get("from_zone") or selector.get("zone") or "").casefold()
+                if from_zone in ("your_hand", "ally_hand"):
+                    from_zone = "hand"
+                if from_zone in ("your_deck", "ally_deck"):
+                    from_zone = "deck"
+                if not from_zone:
+                    if target.get("scope") in ("hand", "ally_hand") or str(filters.get("zone", "")).casefold() in ("hand", "ally_hand"):
+                        from_zone = "hand"
+                    elif str(target.get("scope") or "").casefold() in ("self", "trigger_source") and any(card.unique_id == source_uid for card in branch.state.hand):
+                        from_zone = "hand"
+                    else:
+                        from_zone = "deck"
+                selection = str(target.get("selection") or selector.get("selection") or "chosen").casefold()
+                card_id = one.get("card_id", one.get("source_card_id"))
+                try:
+                    card_id = int(card_id) if card_id is not None else None
+                except (TypeError, ValueError):
+                    card_id = None
+                # Printed “Invoke this card” abilities carry no explicit
+                # card_id in the generated DSL.  Resolve the source entity
+                # before treating the operation as a random deck selector.
+                if card_id is None and str(target.get("scope") or "").casefold() in ("self", "trigger_source"):
+                    source_entity = next((item for item in branch.state.my_board if item.unique_id == source_uid), None)
+                    if source_entity is None:
+                        source_entity = next((item for item in branch.state.enemy_board if item.unique_id == source_uid), None)
+                    if source_entity is not None:
+                        card_id = source_entity.card_id
+
+                # Hand invocations select an actual entity.  A chosen hand
+                # target is passed through the deterministic primitive so its
+                # source UID and exact removal semantics stay centralized.
+                if from_zone == "hand":
+                    requested: set[int] = set()
+                    if isinstance(target_uid, Mapping):
+                        requested = {int(key) for key, value in target_uid.items() if value}
+                    elif isinstance(target_uid, (list, tuple, set)):
+                        requested = {int(value) for value in target_uid}
+                    elif target_uid is not None:
+                        try:
+                            requested = {int(target_uid)}
+                        except (TypeError, ValueError):
+                            requested = set()
+                    candidates = [
+                        card for card in branch.state.hand
+                        if (card_id is None or card.card_id == card_id)
+                        and (not requested or card.unique_id in requested)
+                        and self._hand_card_matches_filters(card, filters)
+                    ]
+                    if not candidates:
+                        if not branch.state.hand and selection in ("all", "each"):
+                            output.append(branch)
+                        else:
+                            output.append(StochasticBranch(branch.probability, branch.state, tuple(sorted(set(branch.unsupported_ops) | {"invoke_hand_target"})), branch.warnings))
+                        continue
+                    if selection == "random" and not requested:
+                        candidates = list(candidates)
+                        weight = 1.0 / len(candidates)
+                        for card in candidates:
+                            bound = dict(one)
+                            bound["from_zone"] = "hand"
+                            bound["card_id"] = card.card_id
+                            bound["target"] = {"scope": "hand", "selection": "chosen"}
+                            for result in self._invoke_card_branches(branch.state, bound, source_uid, card.unique_id, choice=choice):
+                                output.append(StochasticBranch(branch.probability * weight * result.probability, result.state, tuple(sorted(set(branch.unsupported_ops) | set(result.unsupported_ops))), tuple(branch.warnings) + tuple(result.warnings)))
+                    else:
+                        card = candidates[0]
+                        bound = dict(one)
+                        bound["from_zone"] = "hand"
+                        bound["card_id"] = card.card_id
+                        bound["target"] = {"scope": "hand", "selection": "chosen"}
+                        for result in self._invoke_card_branches(branch.state, bound, source_uid, card.unique_id, choice=choice):
+                            output.append(StochasticBranch(branch.probability * result.probability, result.state, tuple(sorted(set(branch.unsupported_ops) | set(result.unsupported_ops))), tuple(branch.warnings) + tuple(result.warnings)))
+                    continue
+
+                if branch.state.deck_replacement:
+                    replaced = branch.state.clone()
+                    replaced.total_deck_count = max(0, replaced.total_deck_count - 1)
+                    output.append(StochasticBranch(
+                        branch.probability,
+                        replaced,
+                        tuple(sorted(set(branch.unsupported_ops) | {"invoke_replaced_deck"})),
+                        branch.warnings,
+                    ))
+                    continue
+
+                # An explicit card id (including the inferred source id for
+                # “Invoke this card”) is not a random draw from the whole
+                # deck.  If a known copy exists, invoke it with probability
+                # one; otherwise retain one explicit hidden/unavailable
+                # branch instead of assigning probability to unrelated cards.
+                if card_id is not None:
+                    known_count = int(branch.state.deck_distribution.get(card_id, 0) or 0)
+                    if known_count > 0:
+                        bound = dict(one)
+                        bound["from_zone"] = "deck"
+                        bound["card_id"] = card_id
+                        bound["target"] = {"scope": "self"}
+                        for result in self._invoke_card_branches(branch.state, bound, source_uid, choice=choice):
+                            output.append(StochasticBranch(
+                                branch.probability * result.probability,
+                                result.state,
+                                tuple(sorted(set(branch.unsupported_ops) | set(result.unsupported_ops))),
+                                tuple(branch.warnings) + tuple(result.warnings),
+                            ))
+                    elif int(branch.state.total_deck_count) > 0:
+                        unknown = branch.state.clone()
+                        unknown.total_deck_count = max(0, unknown.total_deck_count - 1)
+                        gap = "invoke_replaced_deck" if branch.state.deck_replacement else "invoke_unknown_pool"
+                        output.append(StochasticBranch(
+                            branch.probability,
+                            unknown,
+                            tuple(sorted(set(branch.unsupported_ops) | {gap})),
+                            branch.warnings,
+                        ))
+                    else:
+                        output.append(StochasticBranch(branch.probability, branch.state, branch.unsupported_ops, tuple(branch.warnings) + (f"card {card_id} is not available to invoke",)))
+                    continue
+
+                selector_for_deck: dict[str, Any] = {"filters": filters}
+                selector_for_deck["side"] = selector.get("side", filters.get("side"))
+                if card_id is not None:
+                    known = [(card_id, int(branch.state.deck_distribution.get(card_id, 0) or 0))]
+                    known = [(cid, amount) for cid, amount in known if amount > 0]
+                else:
+                    known = [
+                        (int(cid), int(amount))
+                        for cid, amount in branch.state.deck_distribution.items()
+                        if int(amount) > 0 and self._card_matches_selector(int(cid), selector_for_deck)
+                    ]
+                visible_total = sum(max(0, int(amount)) for amount in branch.state.deck_distribution.values())
+                selector_side = selector_for_deck.get("side")
+                if selector_side not in (None, "ally", "your"):
+                    known = []
+                    hidden_total = max(1, int(branch.state.total_deck_count))
+                else:
+                    hidden_total = max(0, int(branch.state.total_deck_count) - visible_total)
+                known_total = sum(amount for _, amount in known)
+                total = known_total + hidden_total
+                if not total:
+                    # A known empty deck is a legal no-op; an effect with a
+                    # concrete card id that is not in the known pool is still
+                    # reported as an unavailable invocation.
+                    if card_id is not None and int(branch.state.total_deck_count) > 0:
+                        output.append(StochasticBranch(branch.probability, branch.state, tuple(sorted(set(branch.unsupported_ops) | {"invoke_unknown_pool"})), branch.warnings))
+                    else:
+                        output.append(branch)
+                    continue
+                for candidate_id, amount in known:
+                    bound = dict(one)
+                    bound["from_zone"] = "deck"
+                    bound["card_id"] = candidate_id
+                    bound["target"] = {"scope": "self"}
+                    for result in self._invoke_card_branches(branch.state, bound, source_uid, choice=choice):
+                        output.append(StochasticBranch(
+                            branch.probability * amount / total * result.probability,
+                            result.state,
+                            tuple(sorted(set(branch.unsupported_ops) | set(result.unsupported_ops))),
+                            tuple(branch.warnings) + tuple(result.warnings),
+                        ))
+                if hidden_total:
+                    unknown = branch.state.clone()
+                    unknown.total_deck_count = max(0, unknown.total_deck_count - 1)
+                    output.append(StochasticBranch(
+                        branch.probability * hidden_total / total,
+                        unknown,
+                        tuple(sorted(set(branch.unsupported_ops) | {"invoke_unknown_pool"})),
+                        branch.warnings,
+                    ))
+            current = self._merge_stochastic(output)
+        return current
+
+    @staticmethod
+    def _hand_card_matches_filters(card: LethalHandCard, filters: Mapping[str, Any]) -> bool:
+        wanted_id = filters.get("card_id")
+        if wanted_id is not None:
+            try:
+                if card.card_id != int(wanted_id):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        wanted_type = filters.get("card_type")
+        if wanted_type:
+            values = wanted_type if isinstance(wanted_type, (list, tuple, set)) else [wanted_type]
+            actual = {1: "follower", 2: "amulet", 3: "countdown_amulet", 4: "spell"}.get(card.type, card.type)
+            if actual not in values and not (actual == "countdown_amulet" and "amulet" in values):
+                return False
+        max_cost = filters.get("max_cost", filters.get("max_base_cost"))
+        if isinstance(max_cost, (int, float)) and int(card.cost) > int(max_cost):
+            return False
+        wanted_tribe = filters.get("tribe")
+        if wanted_tribe:
+            values = wanted_tribe if isinstance(wanted_tribe, (list, tuple, set)) else [wanted_tribe]
+            if not any(str(value).casefold() in {str(item).casefold() for item in card.tribes} for value in values):
+                return False
+        return True
+
+    def _resolve_deck_invocations(self, state: LethalState, trigger: str) -> InterpreterResult:
+        """Resolve known Invoke listeners on cards currently in the deck."""
+        if trigger not in ("on_turn_start", "on_turn_end"):
+            return InterpreterResult(state)
+        current = state
+        unsupported: set[str] = set()
+        warnings: list[str] = []
+        # Iterate over a snapshot: invoking one copy mutates the distribution,
+        # while a Fanfare may add cards back to the deck/hand.
+        for card_id, count in list(current.deck_distribution.items()):
+            if int(count) <= 0:
+                continue
+            rule = self.rules.get(int(card_id), {})
+            abilities = [
+                ability for mode in rule.get("modes", ()) if isinstance(mode, Mapping)
+                for ability in mode.get("abilities", ()) if isinstance(mode.get("abilities"), (list, tuple))
+                if isinstance(ability, Mapping) and ability.get("trigger") == trigger and self._contains_op(ability.get("effects", ()), "invoke")
+            ]
+            if not abilities:
+                continue
+            # Each physical copy has its own Invoke listener.  Stop at the
+            # board cap; the helper reports the resulting warning explicitly.
+            for _ in range(max(0, int(count))):
+                if len(current.my_board) >= 5:
+                    warnings.append("ally field is full; invoke skipped")
+                    break
+                condition_failed = False
+                for ability in abilities:
+                    condition = ability.get("condition")
+                    verdict = self._condition_met(current, condition) if condition is not None else True
+                    if verdict is None:
+                        unsupported.add("conditional")
+                        condition_failed = True
+                        break
+                    if not verdict:
+                        condition_failed = True
+                        break
+                if condition_failed:
+                    break
+                result = self._invoke_effect(current, {"op": "invoke", "card_id": int(card_id), "from_zone": "deck", "target": {"scope": "self"}}, 0)
+                current = result.state
+                unsupported.update(result.unsupported_ops)
+                warnings.extend(result.warnings)
+                if int(current.deck_distribution.get(int(card_id), 0) or 0) <= 0:
+                    break
+        return InterpreterResult(current, tuple(sorted(unsupported)), tuple(warnings))
+
     def _effects(self, state: LethalState, effects: Any, source_uid: int, target_uid: Any = None, *, choice: Any = None) -> tuple[LethalState, set[str], list[str]]:
         current = state
         unsupported: set[str] = set()
         warnings: list[str] = []
+        previous_effect: Mapping[str, Any] | None = None
+        previous_state: LethalState | None = None
         for effect in effects if isinstance(effects, (list, tuple)) else ():
             if not isinstance(effect, Mapping):
                 continue
@@ -1038,6 +2395,25 @@ class EventInterpreter:
             if any(str(item).startswith("insufficient_resource:") for item in unsupported):
                 break
             op = effect.get("op")
+            if op == "modify_previous_effect":
+                if previous_effect is None or previous_state is None:
+                    unsupported.add("modify_previous_effect_context")
+                    continue
+                modified = self._runtime_previous_modifier(previous_effect, effect)
+                if modified is None:
+                    unsupported.add(f"modify_previous_effect:{effect.get('field')}")
+                    continue
+                # Roll back the immediately preceding operation and execute
+                # its replacement once.  This is the runtime equivalent of
+                # compiler-side ``instead`` resolution.
+                current = previous_state.clone()
+                current, nested_ops, nested_warns = self._effects(current, [modified], source_uid, target_uid, choice=choice)
+                unsupported.update(nested_ops)
+                warnings.extend(nested_warns)
+                previous_effect = modified
+                continue
+            previous_state = current.clone()
+            previous_effect = dict(effect)
             amount = effect.get("amount", 0)
             if isinstance(amount, str):
                 resolved = self._resolve_value(current, amount, source_uid)
@@ -1057,7 +2433,7 @@ class EventInterpreter:
             # matching board follower as well as the intended hand cards.
             source_is_hand = any(card.unique_id == source_uid for card in current.hand)
             target_is_hand = (
-                scope == "hand"
+                scope in ("hand", "ally_hand", "enemy_hand")
                 or str(filters.get("zone", "")).casefold() in ("hand", "ally_hand")
                 or (source_is_hand and scope in ("self", "trigger_source"))
             )
@@ -1066,6 +2442,52 @@ class EventInterpreter:
             if op == "damage" and scope == "enemy_leader":
                 current = current.clone()
                 current.enemy_hp -= max(0, int(amount) + int(current.enemy_damage_taken_modifier))
+            elif op == "damage" and scope == "any" and selection not in ("all", "each"):
+                # ``any`` targets with ``card_type: [follower, leader]`` may
+                # bind to the enemy leader.  Leaders are not board indexes,
+                # so resolve the explicit leader UID/marker before the field
+                # target resolver rather than treating it as a missing
+                # follower target.
+                leader_uid = getattr(current, "enemy_leader_uid", None)
+                leader_markers = {"leader", "enemy_leader", "enemy_leader_uid"}
+                if leader_uid is not None:
+                    leader_markers.update({leader_uid, str(leader_uid).casefold()})
+                target_is_leader = target_uid in leader_markers or (
+                    target_uid is not None and str(target_uid).casefold() in leader_markers
+                )
+                if target_is_leader and self._matches_target_filters(None, "enemy", filters, leader=True):
+                    current = current.clone()
+                    current.enemy_hp -= max(0, int(amount) + int(current.enemy_damage_taken_modifier))
+                else:
+                    indexes = self._target_indexes(current, target, target_uid, source_uid)
+                    if not indexes:
+                        warnings.append("damage target not found")
+                        continue
+                    current = current.clone()
+                    for side, index in sorted(indexes, key=lambda item: (item[0], -item[1])):
+                        board = current.my_board if side == "ally" else current.enemy_board
+                        if not (0 <= index < len(board)):
+                            continue
+                        follower = board[index]
+                        remaining_hp = follower.hp - int(amount)
+                        if remaining_hp > 0:
+                            board[index] = replace(follower, hp=remaining_hp)
+                        else:
+                            removed = board.pop(index)
+                            if side == "ally":
+                                current.cemetery += 1
+                                self._record_destroyed(current, removed)
+                                if self._is_amulet(removed):
+                                    faith_result = self._resolve_faith_trigger(current, "on_ally_amulet_destroy")
+                                    current = faith_result.state
+                                    unsupported.update(faith_result.unsupported_ops)
+                                    warnings.extend(faith_result.warnings)
+                                last_words = self._resolve_last_words(current, removed)
+                                current = last_words.state
+                                unsupported.update(last_words.unsupported_ops)
+                                warnings.extend(last_words.warnings)
+                            else:
+                                current.last_destroyed_snapshot = removed
             elif op == "heal" and scope == "ally_leader":
                 current = current.clone()
                 if current.ally_hp or current.ally_max_hp:
@@ -1073,6 +2495,22 @@ class EventInterpreter:
                     current.ally_hp = min(cap, current.ally_hp + int(amount))
                 else:
                     unsupported.add("heal_target")
+            elif op == "heal" and scope in ("ally_follower", "any") and selection in ("all", "each"):
+                # “Restore X defense to all allies” includes the leader and
+                # every allied follower.  Follower max defense is not tracked
+                # separately in the compact model, so their current HP is the
+                # conservative mutable cap, matching existing buff semantics.
+                current = current.clone()
+                filters = target.get("filters") if isinstance(target.get("filters"), Mapping) else {}
+                side_filter = filters.get("side")
+                if scope == "ally_follower" or side_filter in (None, "ally"):
+                    for i, follower in enumerate(current.my_board):
+                        if self._matches_follower_filters(follower, "ally", filters):
+                            current.my_board[i] = replace(follower, hp=follower.hp + int(amount))
+                if scope == "any" and side_filter in (None, "ally") and not filters.get("card_type"):
+                    if current.ally_hp or current.ally_max_hp:
+                        cap = current.ally_max_hp or current.ally_hp + int(amount)
+                        current.ally_hp = min(cap, current.ally_hp + int(amount))
             elif op == "damage" and scope == "enemy_follower":
                 current = current.clone()
                 if isinstance(target_uid, Mapping):
@@ -1080,6 +2518,9 @@ class EventInterpreter:
                     for i, follower in list(enumerate(current.enemy_board))[::-1]:
                         damage = int(allocations.get(follower.unique_id, 0))
                         if damage <= 0:
+                            continue
+                        if selection not in ("all", "each") and self._source_is_ally(current, source_uid) and _has_keyword(follower, "ambush"):
+                            warnings.append(f"{follower.name} is hidden by Ambush")
                             continue
                         remaining_hp = follower.hp - damage
                         if remaining_hp > 0:
@@ -1091,6 +2532,9 @@ class EventInterpreter:
                     selected_ids = {int(value) for value in target_uid}
                     for i, follower in list(enumerate(current.enemy_board))[::-1]:
                         if follower.unique_id not in selected_ids:
+                            continue
+                        if selection not in ("all", "each") and self._source_is_ally(current, source_uid) and _has_keyword(follower, "ambush"):
+                            warnings.append(f"{follower.name} is hidden by Ambush")
                             continue
                         remaining_hp = follower.hp - int(amount)
                         if remaining_hp > 0:
@@ -1127,6 +2571,9 @@ class EventInterpreter:
                 else:
                     for i, follower in enumerate(current.enemy_board):
                         if follower.unique_id == target_uid:
+                            if selection not in ("all", "each") and self._source_is_ally(current, source_uid) and _has_keyword(follower, "ambush"):
+                                warnings.append(f"{follower.name} is hidden by Ambush")
+                                break
                             remaining_hp = follower.hp - int(amount)
                             if remaining_hp > 0:
                                 current.enemy_board[i] = replace(follower, hp=remaining_hp)
@@ -1285,16 +2732,42 @@ class EventInterpreter:
                         unsupported.add("modify_counter_state")
                     continue
                 # Countdown counters are stored on the unified board follower
-                # model for deterministic Engage simulations.
-                if scope not in ("self", None):
-                    unsupported.add("modify_counter_target")
-                    continue
+                # model.  ``self`` is the common Engage case, while global
+                # listeners (for example Barbaros advancing every allied
+                # pirate flag) may target several matching permanents.
+                if scope in ("self", None):
+                    target_indexes = [
+                        ("ally", index)
+                        for index, follower in enumerate(current.my_board)
+                        if follower.unique_id == source_uid and follower.countdown is not None
+                    ]
+                else:
+                    target_indexes = [
+                        (side, index)
+                        for side, index in self._target_indexes(current, target, target_uid, source_uid)
+                        if side == "ally"
+                    ]
+                    if not target_indexes:
+                        unsupported.add("modify_counter_target")
+                        continue
+                # Capture UIDs before mutations shift board indexes and run
+                # countdown-expiry destruction through the normal Last Words
+                # pipeline when a counter reaches zero.
+                target_uids = [current.my_board[index].unique_id for _side, index in target_indexes if 0 <= index < len(current.my_board)]
                 changed = False
-                for i, follower in enumerate(current.my_board):
-                    if follower.unique_id == source_uid and follower.countdown is not None:
-                        current.my_board[i] = replace(follower, countdown=max(0, follower.countdown - delta))
-                        changed = True
-                        break
+                for target_uid_value in target_uids:
+                    index = next((i for i, follower in enumerate(current.my_board) if follower.unique_id == target_uid_value), None)
+                    if index is None:
+                        continue
+                    follower = current.my_board[index]
+                    if follower.countdown is None:
+                        continue
+                    next_countdown = max(0, follower.countdown - delta)
+                    current = current.clone()
+                    current.my_board[index] = replace(follower, countdown=next_countdown)
+                    changed = True
+                    if next_countdown == 0:
+                        current = self._destroy_ally_uid(current, target_uid_value, unsupported, warnings)
                 if not changed:
                     unsupported.add("modify_counter_state")
             elif op == "modify_resource":
@@ -1460,6 +2933,11 @@ class EventInterpreter:
                 current = result.state
                 unsupported.update(result.unsupported_ops)
                 warnings.extend(result.warnings)
+            elif op == "invoke":
+                result = self._invoke_effect(current, effect, source_uid, target_uid, choice=choice)
+                current = result.state
+                unsupported.update(result.unsupported_ops)
+                warnings.extend(result.warnings)
             elif op == "transform":
                 if isinstance(effect.get("resource_selector"), Mapping):
                     unsupported.add("transform_unknown")
@@ -1528,27 +3006,119 @@ class EventInterpreter:
                     for i in hand_indexes:
                         card = current.hand[i]
                         current.hand[i] = replace(card, atk=max(0, card.atk + attack), life=max(0, card.life + life))
-                elif not indexes and scope not in ("ally_leader", "enemy_leader"):
+                elif not indexes and scope not in ("ally_leader", "enemy_leader") and selection not in ("all", "each"):
                     unsupported.add("buff_target")
             elif op == "grant_keyword":
                 current = current.clone()
-                keyword = effect.get("keyword")
-                if keyword not in ("storm", "rush", "ward"):
+                keyword = _normalize_keyword(effect.get("keyword"))
+                if keyword not in _IMPLEMENTED_KEYWORDS:
                     unsupported.add(f"grant_keyword:{keyword}")
                     continue
                 indexes = [] if target_is_hand else self._target_indexes(current, target, target_uid, source_uid)
                 for side, i in indexes:
-                    if side != "ally":
-                        continue
-                    follower = current.my_board[i]
-                    current.my_board[i] = replace(follower, has_storm=follower.has_storm or keyword == "storm", has_rush=follower.has_rush or keyword == "rush", is_ward=follower.is_ward or keyword == "ward", can_attack_leader=follower.can_attack_leader or keyword == "storm", can_attack_field=follower.can_attack_field or keyword in ("storm", "rush"), statuses=tuple(sorted(set(follower.statuses) | {keyword})))
+                    board = current.my_board if side == "ally" else current.enemy_board
+                    follower = board[i]
+                    board[i] = replace(
+                        follower,
+                        has_storm=follower.has_storm or keyword == "storm",
+                        has_rush=follower.has_rush or keyword == "rush" or keyword == "storm",
+                        is_ward=follower.is_ward or keyword == "ward",
+                        has_bane=follower.has_bane or keyword == "bane",
+                        has_drain=follower.has_drain or keyword == "drain",
+                        has_ambush=follower.has_ambush or keyword == "ambush",
+                        can_attack_leader=follower.can_attack_leader or keyword == "storm",
+                        can_attack_field=follower.can_attack_field or keyword in ("storm", "rush"),
+                        statuses=tuple(sorted(set(follower.statuses) | {keyword})),
+                    )
                 hand_indexes = self._hand_indexes(current, target, target_uid, source_uid) if target_is_hand else []
                 for i in hand_indexes:
                     card = current.hand[i]
                     if keyword == "storm":
-                        current.hand[i] = replace(card, static_storm=True, static_rush=True)
+                        current.hand[i] = replace(card, static_storm=True, static_rush=True, statuses=tuple(sorted(set(card.statuses) | {keyword})))
                     elif keyword == "rush":
-                        current.hand[i] = replace(card, static_rush=True)
+                        current.hand[i] = replace(card, static_rush=True, statuses=tuple(sorted(set(card.statuses) | {keyword})))
+                    elif keyword == "bane":
+                        current.hand[i] = replace(card, has_bane=True, statuses=tuple(sorted(set(card.statuses) | {keyword})))
+                    elif keyword == "drain":
+                        current.hand[i] = replace(card, has_drain=True, statuses=tuple(sorted(set(card.statuses) | {keyword})))
+                    elif keyword == "ambush":
+                        current.hand[i] = replace(card, has_ambush=True, statuses=tuple(sorted(set(card.statuses) | {keyword})))
+                    else:
+                        current.hand[i] = replace(card, statuses=tuple(sorted(set(card.statuses) | {keyword})))
+            elif op == "remove_keyword":
+                current = current.clone()
+                keyword = _normalize_keyword(effect.get("keyword", effect.get("status")))
+                if keyword not in _IMPLEMENTED_KEYWORDS:
+                    unsupported.add(f"remove_keyword:{keyword}")
+                    continue
+                indexes = [] if target_is_hand else self._target_indexes(current, target, target_uid, source_uid)
+                for side, i in indexes:
+                    board = current.my_board if side == "ally" else current.enemy_board
+                    if not (0 <= i < len(board)):
+                        continue
+                    follower = board[i]
+                    follower_statuses = {_normalize_keyword(item) for item in follower.statuses}
+                    # Storm grants Rush implicitly.  ``_has_keyword`` cannot
+                    # distinguish that projection from an explicitly printed
+                    # Rush on legacy snapshots, so prefer the canonical
+                    # status set and fall back to a Rush flag only when Storm
+                    # is not present.  This makes removing Storm from a
+                    # Storm-only follower remove its implicit Rush as well,
+                    # while preserving a separately granted Rush.
+                    had_storm = bool(follower.has_storm or "storm" in follower_statuses)
+                    explicit_rush = "rush" in follower_statuses or (follower.has_rush and not had_storm)
+                    has_storm = had_storm and keyword != "storm"
+                    has_rush = (explicit_rush or (had_storm and keyword != "storm")) and keyword != "rush"
+                    is_ward = bool(follower.is_ward or "ward" in follower_statuses) and keyword != "ward"
+                    has_bane = bool(follower.has_bane or "bane" in follower_statuses) and keyword != "bane"
+                    has_drain = bool(follower.has_drain or "drain" in follower_statuses) and keyword != "drain"
+                    has_ambush = bool(follower.has_ambush or "ambush" in follower_statuses) and keyword != "ambush"
+                    # Storm implies the ability to attack followers, so a
+                    # removed Rush remains available only while Storm persists.
+                    can_attack_leader = follower.can_attack_leader and keyword != "storm"
+                    can_attack_field = follower.can_attack_field and keyword not in ("storm", "rush")
+                    if has_storm:
+                        can_attack_leader = follower.can_attack_leader
+                        can_attack_field = True
+                    elif has_rush:
+                        can_attack_field = True
+                    board[i] = replace(
+                        follower,
+                        has_storm=has_storm,
+                        has_rush=has_rush,
+                        is_ward=is_ward,
+                        has_bane=has_bane,
+                        has_drain=has_drain,
+                        has_ambush=has_ambush,
+                        can_attack_leader=can_attack_leader,
+                        can_attack_field=can_attack_field,
+                        statuses=_without_keyword(follower.statuses, keyword),
+                    )
+                hand_indexes = self._hand_indexes(current, target, target_uid, source_uid) if target_is_hand else []
+                for i in hand_indexes:
+                    card = current.hand[i]
+                    card_statuses = {_normalize_keyword(item) for item in card.statuses}
+                    # Storm grants Rush implicitly, but a separately printed
+                    # or granted Rush must survive removing Storm.  The
+                    # legacy booleans cannot distinguish the two on their
+                    # own, so prefer the explicit status set and only retain
+                    # ``static_rush`` when it was not Storm-derived.
+                    had_storm = bool(card.static_storm or "storm" in card_statuses)
+                    explicit_rush = "rush" in card_statuses or (card.static_rush and not had_storm)
+                    new_static_rush = card.static_rush
+                    if keyword == "rush":
+                        new_static_rush = False
+                    elif keyword == "storm" and not explicit_rush:
+                        new_static_rush = False
+                    current.hand[i] = replace(
+                        card,
+                        static_storm=had_storm and keyword != "storm",
+                        static_rush=new_static_rush,
+                        has_bane=bool(card.has_bane or "bane" in card_statuses) and keyword != "bane",
+                        has_drain=bool(card.has_drain or "drain" in card_statuses) and keyword != "drain",
+                        has_ambush=bool(card.has_ambush or "ambush" in card_statuses) and keyword != "ambush",
+                        statuses=_without_keyword(card.statuses, keyword),
+                    )
             elif op == "remove_abilities":
                 current = current.clone()
                 indexes = self._target_indexes(current, target, target_uid, source_uid)
@@ -1556,7 +3126,26 @@ class EventInterpreter:
                     warnings.append("remove_abilities target not found")
                 for side, index in indexes:
                     board = current.my_board if side == "ally" else current.enemy_board
-                    board[index] = replace(board[index], abilities_removed=True, statuses=(), last_words=())
+                    follower = board[index]
+                    board[index] = replace(
+                        follower,
+                        abilities_removed=True,
+                        # Keyword abilities are mirrored by legacy booleans
+                        # in ``LethalFollower``.  Clear all of them together
+                        # with the status tuple; otherwise a removed Ward
+                        # still blocks attacks and a removed Storm still
+                        # grants leader attacks.  Evolution's ordinary
+                        # follower-to-follower permission is state, not a
+                        # printed keyword, so retain it for an evolved body.
+                        has_storm=False,
+                        has_rush=False,
+                        is_ward=False,
+                        can_attack_leader=False,
+                        can_attack_field=bool(follower.is_evolved),
+                        statuses=(),
+                        last_words=(),
+                        granted_abilities=(),
+                    )
             elif op == "modify_damage_taken":
                 # The current v2 operation is intentionally leader-facing;
                 # keeping the modifier in state makes later damage events
@@ -1569,7 +3158,7 @@ class EventInterpreter:
                 else:
                     unsupported.add("modify_damage_taken_target")
             elif op == "gain_status":
-                status = str(effect.get("status", "")).casefold()
+                status = _normalize_keyword(effect.get("status", ""))
                 duration = str(effect.get("duration", "permanent")).casefold()
                 nested_ability = effect.get("ability")
                 if status.startswith("last words") and isinstance(nested_ability, Mapping):
@@ -1585,25 +3174,65 @@ class EventInterpreter:
                             last_words=tuple(follower.last_words) + (dict(nested_ability),),
                         )
                     continue
+                # Quoted non-keyword abilities (for example “At the end of
+                # your opponent's turn, destroy this card” or “Whenever you
+                # play an Enhanced card, ...”) are stored on the selected
+                # entity and dispatched through the normal board trigger
+                # path.  This keeps the status owner-relative and lets exact
+                # copies preserve the granted listener.
+                if isinstance(nested_ability, Mapping) and nested_ability.get("trigger"):
+                    current = current.clone()
+                    indexes = self._target_indexes(current, target or {"scope": "self"}, target_uid, source_uid)
+                    nested_copy = {
+                        key: (list(value) if isinstance(value, (list, tuple)) else value)
+                        for key, value in nested_ability.items()
+                    }
+                    for side, i in indexes:
+                        if side != "ally":
+                            continue
+                        follower = current.my_board[i]
+                        current.my_board[i] = replace(
+                            follower,
+                            statuses=tuple(sorted(set(follower.statuses) | {status or "granted_ability"})),
+                            granted_abilities=tuple(follower.granted_abilities) + (nested_copy,),
+                        )
+                    continue
+                # The attack-count sentence is an intrinsic status.  It is
+                # represented by the same attack budget used by the static
+                # ``Can attack N times per turn`` parser, rather than as an
+                # opaque textual marker.
+                attacks_match = re.fullmatch(r"can\s+attack\s+(\d+)\s+times\s+per\s+turn\.?", status, re.I)
+                if attacks_match:
+                    current = current.clone()
+                    indexes = self._target_indexes(current, target or {"scope": "self"}, target_uid, source_uid)
+                    for side, i in indexes:
+                        if side == "ally":
+                            follower = current.my_board[i]
+                            current.my_board[i] = replace(follower, attacks_left=max(follower.attacks_left, int(attacks_match.group(1))), statuses=tuple(sorted(set(follower.statuses) | {"multi_attack"})))
+                    continue
                 # Only these immediate keyword-like statuses are represented
                 # by LethalFollower. Textual restrictions and temporary
                 # durations require a richer status model and must stay
                 # incomplete instead of being treated as a no-op.
-                if status not in ("storm", "rush", "ward") or duration not in ("permanent", ""):
+                if status not in _IMPLEMENTED_KEYWORDS or duration not in ("permanent", ""):
                     unsupported.add("gain_status")
                     continue
                 current = current.clone()
                 keyword = status
                 indexes = self._target_indexes(current, target or {"scope": "self"}, target_uid, source_uid)
                 for side, i in indexes:
-                    if side != "ally":
+                    board = current.my_board if side == "ally" else current.enemy_board
+                    if not (0 <= i < len(board)):
                         continue
-                    follower = current.my_board[i]
-                    current.my_board[i] = replace(
+                    follower = board[i]
+                    board[i] = replace(
                         follower,
                         has_storm=follower.has_storm or keyword == "storm",
-                        has_rush=follower.has_rush or keyword == "rush",
+                        has_rush=follower.has_rush or keyword in ("storm", "rush"),
                         is_ward=follower.is_ward or keyword == "ward",
+                        has_bane=follower.has_bane or keyword == "bane",
+                        has_drain=follower.has_drain or keyword == "drain",
+                        has_ambush=follower.has_ambush or keyword == "ambush",
                         can_attack_leader=follower.can_attack_leader or keyword == "storm",
                         can_attack_field=follower.can_attack_field or keyword in ("storm", "rush"),
                         statuses=tuple(sorted(set(follower.statuses) | {keyword})),
@@ -1659,23 +3288,32 @@ class EventInterpreter:
                         current.total_deck_count += 1
                         removed += 1
             elif op == "gain_crest":
-                if effect.get("player", "ally") != "ally":
-                    unsupported.add("gain_crest_enemy")
-                    continue
                 current = current.clone()
                 card_id = int(effect.get("card_id", 0) or 0)
                 # A crest is an instance, not a boolean.  Repeated gains keep
                 # separate identities and countdowns.
                 next_uid = self._next_instance_uid(current)
-                instance = {"card_id": card_id, "unique_id": next_uid}
+                owner = str(effect.get("player", "ally") or "ally").casefold()
+                if owner not in ("ally", "enemy"):
+                    unsupported.add(f"gain_crest_player:{owner}")
+                    continue
+                instance = {"card_id": card_id, "unique_id": next_uid, "owner": owner}
                 if effect.get("countdown") is not None:
                     instance["countdown"] = int(effect["countdown"])
                 abilities = [dict(item) for item in effect.get("abilities", ()) if isinstance(item, Mapping)] if isinstance(effect.get("abilities"), (list, tuple)) else []
                 abilities.extend(self._catalog_crest_abilities(card_id))
                 if abilities:
                     instance["abilities"] = abilities
-                current.crest_instances.append(instance)
-                current.active_crests.append(card_id)
+                if owner == "ally":
+                    current.crest_instances.append(instance)
+                    current.active_crests.append(card_id)
+                else:
+                    # Opponent Crests are public state as well.  They must not
+                    # inflate the ally ``crest_count`` condition, but keeping
+                    # their identity/countdown lets a later opponent-turn
+                    # boundary resolve or expire them without losing data.
+                    current.enemy_crest_instances.append(instance)
+                    current.enemy_active_crests.append(card_id)
             elif op == "summon" and "resource_selector" not in effect:
                 current = current.clone()
                 card_id = effect.get("card_id")
@@ -1707,6 +3345,40 @@ class EventInterpreter:
                         break
                     current.hand.append(card)
                     current.last_created_uid = card.unique_id
+            elif op == "add_to_zone":
+                destination = str(effect.get("destination", "")).casefold()
+                current = current.clone()
+                card_id = effect.get("card_id")
+                count_value = self._resolve_value(current, effect.get("count", 1), source_uid)
+                if card_id is None or count_value is None:
+                    unsupported.add("add_to_zone")
+                    continue
+                for _ in range(max(0, int(count_value))):
+                    if destination == "deck":
+                        current.deck_distribution[int(card_id)] = current.deck_distribution.get(int(card_id), 0) + 1
+                        current.total_deck_count += 1
+                        continue
+                    if destination == "cemetery":
+                        current.cemetery += 1
+                        continue
+                    if destination == "field":
+                        if len(current.my_board) >= 5:
+                            warnings.append("ally field is full; add_to_zone skipped")
+                            break
+                        follower = self._follower_for_card(int(card_id), self._next_instance_uid(current))
+                        if follower is None:
+                            unsupported.add(f"add_to_zone_card:{card_id}")
+                            break
+                        current.my_board.append(follower)
+                        current.last_created_uid = follower.unique_id
+                        continue
+                    if destination == "banished":
+                        # The compact state has no public banished-card list.
+                        # Keep the insertion explicit rather than pretending it
+                        # entered the deck or cemetery.
+                        unsupported.add("add_to_zone_banished")
+                        continue
+                    unsupported.add(f"add_to_zone_destination:{destination}")
             elif op == "modify_crest":
                 current = current.clone()
                 delta = int(effect.get("amount", amount) or 0)
@@ -1832,7 +3504,7 @@ class EventInterpreter:
                 if not target_ids:
                     warnings.append("auto_evolve target not found")
                 else:
-                    evolved_result = self.evolve(current, target_ids[0], super_evolve=evolution_kind == "super")
+                    evolved_result = self.auto_evolve(current, target_ids[0], super_evolve=evolution_kind == "super")
                     current = evolved_result.state
                     unsupported.update(evolved_result.unsupported_ops)
                     warnings.extend(evolved_result.warnings)
@@ -1871,6 +3543,10 @@ class EventInterpreter:
                     warnings.extend(nested_warns)
                     if any(str(item).startswith("insufficient_resource:") for item in nested_ops):
                         break
+            elif op == "progressive_sequence":
+                current, nested_ops, nested_warns = self._progressive_effect(current, effect, source_uid, target_uid, choice=choice)
+                unsupported.update(nested_ops)
+                warnings.extend(nested_warns)
             elif op == "sequence":
                 current, nested_ops, nested_warns = self._effects(current, effect.get("effects", ()), source_uid, target_uid, choice=choice)
                 unsupported.update(nested_ops)
@@ -1889,18 +3565,30 @@ class EventInterpreter:
                 if not isinstance(choices, (list, tuple)) or not choices:
                     unsupported.add("mode_choice")
                     continue
-                selected_choice = None
-                if choice is not None:
-                    if isinstance(choice, int) and 0 <= choice < len(choices):
-                        selected_choice = choices[choice]
+                # ``selection_count`` allows cards such as “Select 2 Modes”
+                # to carry more than one branch.  The engine passes a tuple
+                # of labels for those actions; a direct interpreter caller
+                # may still pass one index/label for the common one-choice
+                # form.
+                selected_values = list(choice) if isinstance(choice, (list, tuple)) and not all(isinstance(item, Mapping) for item in choice) else [choice]
+                selected_choices: list[Mapping[str, Any]] = []
+                for selected_value in selected_values:
+                    selected_choice = None
+                    if isinstance(selected_value, Mapping):
+                        selected_choice = selected_value
+                    elif isinstance(selected_value, int) and 0 <= selected_value < len(choices):
+                        selected_choice = choices[selected_value]
                     else:
-                        selected_choice = next((item for item in choices if isinstance(item, Mapping) and str(item.get("label")) == str(choice)), None)
-                if selected_choice is None:
+                        selected_choice = next((item for item in choices if isinstance(item, Mapping) and str(item.get("label")) == str(selected_value)), None)
+                    if isinstance(selected_choice, Mapping):
+                        selected_choices.append(selected_choice)
+                if not selected_choices:
                     unsupported.add("mode_choice")
                     continue
-                current, nested_ops, nested_warns = self._effects(current, selected_choice.get("effects", ()), source_uid, target_uid, choice=choice)
-                unsupported.update(nested_ops)
-                warnings.extend(nested_warns)
+                for selected_choice in selected_choices:
+                    current, nested_ops, nested_warns = self._effects(current, selected_choice.get("effects", ()), source_uid, target_uid, choice=choice)
+                    unsupported.update(nested_ops)
+                    warnings.extend(nested_warns)
             elif op == "activate_all_mode_choices":
                 # If the compiler emits this as a separate ability, the
                 # selected choices are supplied through ``choice`` as a list
@@ -1917,6 +3605,22 @@ class EventInterpreter:
                     current, nested_ops, nested_warns = self._effects(current, nested, source_uid, target_uid, choice=choice)
                     unsupported.update(nested_ops)
                     warnings.extend(nested_warns)
+            elif op == "replace_deck":
+                replacement = str(effect.get("replacement", "")).strip()
+                if not replacement:
+                    unsupported.add("replace_deck")
+                    continue
+                current = current.clone()
+                current.deck_replacement = replacement
+                # The replacement template has no publicly known card
+                # identities.  Preserve the remaining count, but discard the
+                # old identity distribution so future selectors cannot sample
+                # cards from the previous deck.
+                current.total_deck_count = max(
+                    int(current.total_deck_count),
+                    sum(max(0, int(value)) for value in current.deck_distribution.values()),
+                )
+                current.deck_distribution = {}
             else:
                 unsupported.add(str(op))
         return current, unsupported, warnings
@@ -1941,6 +3645,8 @@ class EventInterpreter:
                 return True
             if EventInterpreter._effect_contains_random(effect.get("else_effects", ())):
                 return True
+            if any(EventInterpreter._effect_contains_random(item.get("effects", ())) for item in effect.get("steps", ()) if isinstance(item, Mapping)):
+                return True
             if any(EventInterpreter._effect_contains_random(item.get("effects", ())) for item in effect.get("choices", ()) if isinstance(item, Mapping)):
                 return True
         return False
@@ -1960,6 +3666,10 @@ class EventInterpreter:
         if index is None:
             return [StochasticBranch(1.0, state, warnings=(f"hand card {unique_id} not found",))]
         card = state.hand[index]
+        if getattr(state, "legal_modes_known", False):
+            allowed_modes = state.legal_modes.get(int(unique_id))
+            if allowed_modes is None or mode not in allowed_modes:
+                return [StochasticBranch(1.0, state, warnings=(f"Tracker forbids {mode} play for {unique_id}",))]
         play_cost = self.mode_cost(card, mode)
         if play_cost is None:
             return [StochasticBranch(1.0, state, warnings=(f"mode {mode} is not available for {card.name}",))]
@@ -1973,32 +3683,48 @@ class EventInterpreter:
             resource, need, have = resource_error
             return [StochasticBranch(1.0, state, (f"insufficient_resource:{resource}",), (f"insufficient {resource} (need {need}, have {have})",))]
         base = state.clone()
+        self._invalidate_snapshot_legality(base)
         base.hand.pop(index)
         self._pay_pp(base, int(play_cost))
         base.play_count += 1
         base.last_played_card_cost = int(play_cost)
+        base.last_played_mode = str(mode)
         base.last_played_card_type = card.type
         base.last_played_tribes = tuple(card.tribes)
+        base_cost = self._base_card_cost(card)
+        base.played_base_costs = tuple(sorted(set(base.played_base_costs) | {base_cost}))
         self._ensure_catalog_resources(base, card.card_id, card.unique_id)
         rule = self.rules.get(card.card_id, {})
         enhanced = mode == "enhance"
         intrinsic_damage = card.enhance_face_damage if enhanced and card.enhance_face_damage else (card.face_damage if mode == "normal" else 0)
         intrinsic_recover = card.enhance_recover_pp if enhanced and card.enhance_recover_pp else (card.recover_pp if mode == "normal" else 0)
         intrinsic_buff = card.enhance_buff_atk if enhanced and card.enhance_buff_atk else (card.buff_atk if mode == "normal" else 0)
+        board_uids_before = {f.unique_id for f in base.my_board}
         if places_follower:
-            static = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
+            static = self._static_keywords(card.card_id, card)
+            default_attacks = rule.get("default_attacks", 1) if isinstance(rule, Mapping) else 1
+            try:
+                default_attacks = max(1, int(default_attacks))
+            except (TypeError, ValueError):
+                default_attacks = 1
             storm = card.static_storm or (enhanced and card.enhance_gain_storm) or "storm" in static
             rush = card.static_rush or "rush" in static or storm
+            statuses = tuple(sorted(set(str(item) for item in static)))
             base.my_board.append(LethalFollower(
                 unique_id=card.unique_id, card_id=card.card_id, name=card.name,
                 atk=card.atk + intrinsic_buff, hp=card.life,
                 has_storm=storm, has_rush=rush, is_ward="ward" in static,
-                can_attack_leader=storm, can_attack_field=rush, attacks_left=1,
+                can_attack_leader=storm, can_attack_field=rush, attacks_left=default_attacks,
+                statuses=statuses,
                 base_cost=card.cost,
                 spell_boost_count=card.spell_boost_count,
                 has_spell_boost=card.has_spell_boost or self._card_has_trigger(card.card_id, "on_spellboost"),
                 variable_x=card.variable_x,
                 supplement_info=card.supplement_info,
+                has_bane="bane" in static,
+                has_drain="drain" in static,
+                has_ambush="ambush" in static,
+                buff=card.buff,
             ))
             base.last_created_uid = card.unique_id
         branches = self._resolve_abilities_branches(base, rule, mode, "on_play", source_uid=card.unique_id, target_uid=target_uid, choice=choice)
@@ -2009,7 +3735,10 @@ class EventInterpreter:
         ):
             mode_branches: list[StochasticBranch] = []
             for branch in branches:
-                mode_event = self.select_mode(branch.state)
+                mode_event = self.select_mode(
+                    branch.state,
+                    count=self._mode_selection_count(rule, mode, choice),
+                )
                 mode_branches.append(StochasticBranch(
                     branch.probability,
                     mode_event.state,
@@ -2020,7 +3749,12 @@ class EventInterpreter:
         branches = self._chain_ability_branches(branches, rule, mode, "on_fanfare", source_uid=card.unique_id, target_uid=target_uid, choice=choice)
         if places_follower:
             branches = self._chain_ability_branches(branches, rule, mode, "on_summon", source_uid=card.unique_id, target_uid=target_uid, choice=choice)
-            branches = self._chain_board_trigger_branches(branches, "on_ally_follower_summon")
+            branches = self._chain_board_trigger_branches(
+                branches,
+                "on_ally_follower_summon",
+                entered_before=board_uids_before,
+            )
+        branches = self._chain_board_trigger_branches(branches, "on_card_play")
         if self._is_spell_card(card):
             branches = self._chain_board_trigger_branches(branches, "on_spellboost")
             branches = self._chain_spellboost_branches(branches, source_uid=card.unique_id)
@@ -2043,8 +3777,8 @@ class EventInterpreter:
                 for branch in branches
             ]
         static_keywords = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
-        if any(keyword not in ("storm", "rush", "ward") for keyword in static_keywords):
-            branches = [StochasticBranch(b.probability, b.state, tuple(sorted(set(b.unsupported_ops) | {f"static_keyword:{k}" for k in static_keywords if k not in ("storm", "rush", "ward")})), b.warnings) for b in branches]
+        if any(_normalize_keyword(keyword) not in _IMPLEMENTED_KEYWORDS for keyword in static_keywords):
+            branches = [StochasticBranch(b.probability, b.state, tuple(sorted(set(b.unsupported_ops) | {f"static_keyword:{k}" for k in static_keywords if _normalize_keyword(k) not in _IMPLEMENTED_KEYWORDS})), b.warnings) for b in branches]
         if rule.get("support") in ("partial", "unsupported"):
             branches = [StochasticBranch(b.probability, b.state, tuple(sorted(set(b.unsupported_ops) | {f"{rule.get('support')}_rule:{card.card_id}"})), b.warnings) for b in branches]
         return self._merge_stochastic(branches)
@@ -2055,14 +3789,26 @@ class EventInterpreter:
             output.extend(self._resolve_abilities_branches(branch.state, rule, mode, trigger, source_uid=source_uid, target_uid=target_uid, choice=choice, probability=branch.probability, inherited_unsupported=branch.unsupported_ops, inherited_warnings=branch.warnings))
         return self._merge_stochastic(output)
 
-    def _resolve_abilities_branches(self, state: LethalState, rule: Mapping[str, Any], mode: str, trigger: str, *, source_uid: int, target_uid: Any = None, choice: Any = None, probability: float = 1.0, inherited_unsupported: tuple[str, ...] = (), inherited_warnings: tuple[str, ...] = ()) -> list[StochasticBranch]:
+    def _resolve_abilities_branches(self, state: LethalState, rule: Mapping[str, Any], mode: str, trigger: str, *, source_uid: int, target_uid: Any = None, choice: Any = None, probability: float = 1.0, inherited_unsupported: tuple[str, ...] = (), inherited_warnings: tuple[str, ...] = (), event_uid: int | None = None) -> list[StochasticBranch]:
         modes = rule.get("modes", ()) if isinstance(rule, Mapping) else ()
         selected = next((item for item in modes if isinstance(item, Mapping) and item.get("kind") == mode), None)
         if selected is None and mode == "normal":
             selected = next((item for item in modes if isinstance(item, Mapping) and item.get("kind") == "normal"), None)
         current = [StochasticBranch(probability, state, tuple(inherited_unsupported), tuple(inherited_warnings))]
-        for ability in selected.get("abilities", ()) if isinstance(selected, Mapping) else ():
+        abilities = list(selected.get("abilities", ())) if isinstance(selected, Mapping) else []
+        source_follower = next((f for f in state.my_board if f.unique_id == source_uid), None)
+        if source_follower is not None and source_follower.abilities_removed:
+            return [StochasticBranch(probability, state, tuple(inherited_unsupported), tuple(inherited_warnings))]
+        if source_follower is not None:
+            abilities.extend(item for item in source_follower.granted_abilities if isinstance(item, Mapping))
+        for ability in abilities:
             if not isinstance(ability, Mapping) or ability.get("trigger") != trigger:
+                continue
+            trigger_filter = ability.get("trigger_filter")
+            if event_uid is None:
+                if isinstance(trigger_filter, Mapping):
+                    continue
+            elif not isinstance(trigger_filter, Mapping) or not self._trigger_filter_matches(state, trigger_filter, event_uid):
                 continue
             next_branches: list[StochasticBranch] = []
             for branch in current:
@@ -2082,33 +3828,84 @@ class EventInterpreter:
                 expanded_effects, replicate_ops = self._expand_replicated_effects(
                     branch.state, rule, mode, ability, source_trigger=trigger
                 )
-                effects = self._effects_branches(branch.state, expanded_effects, source_uid, target_uid, choice=effective_choice)
+                effect_source_uid = event_uid if event_uid is not None else source_uid
+                effects = self._effects_branches(branch.state, expanded_effects, effect_source_uid, target_uid, choice=effective_choice)
                 for effect_branch in effects:
                     next_branches.append(StochasticBranch(branch.probability * effect_branch.probability, effect_branch.state, tuple(sorted(set(branch.unsupported_ops) | set(effect_branch.unsupported_ops) | replicate_ops)), tuple(branch.warnings) + tuple(effect_branch.warnings)))
             current = self._merge_stochastic(next_branches)
         return current
 
-    def _chain_board_trigger_branches(self, branches: list[StochasticBranch], trigger: str) -> list[StochasticBranch]:
-        # Sequentially resolve each board source while retaining branches.
+    def _chain_board_trigger_branches(
+        self,
+        branches: list[StochasticBranch],
+        trigger: str,
+        *,
+        entered_before: set[int] | None = None,
+    ) -> list[StochasticBranch]:
+        """Resolve a board event without replaying listeners on old entities.
+
+        ``on_ally_follower_summon`` is emitted for the followers that entered
+        during this play.  The old implementation iterated every board slot
+        on every play, so a Golem listener could evolve an already-present
+        Golem repeatedly and stochastic branches diverged from deterministic
+        execution.  We retain one unfiltered pass for the public event and a
+        second, event-specific pass for each newly entered UID.
+        """
         result = branches
-        # Random summon/copy branches may have different board entities.  Use
-        # the ordered union of source IDs instead of the first branch only so
-        # every branch gets its own newly-entered follower trigger.
+
+        def run_sources(
+            current: list[StochasticBranch],
+            source_slots: list[int],
+            *,
+            event_uid: int | None = None,
+        ) -> list[StochasticBranch]:
+            for source_uid in source_slots:
+                next_result: list[StochasticBranch] = []
+                for branch in current:
+                    follower = next((f for f in branch.state.my_board if f.unique_id == source_uid), None)
+                    if follower is None or follower.abilities_removed:
+                        next_result.append(branch)
+                        continue
+                    rule = self.rules.get(follower.card_id, {})
+                    next_result.extend(
+                        self._resolve_abilities_branches(
+                            branch.state,
+                            rule,
+                            "normal",
+                            trigger,
+                            source_uid=source_uid,
+                            event_uid=event_uid,
+                            probability=branch.probability,
+                            inherited_unsupported=branch.unsupported_ops,
+                            inherited_warnings=branch.warnings,
+                        )
+                    )
+                current = self._merge_stochastic(next_result)
+            return current
+
+        # The unfiltered pass observes the event once for each board source,
+        # matching ``_resolve_board_trigger``.  Filtered abilities are skipped
+        # here and only considered in the event-specific pass below.
         source_slots: list[int] = []
         for branch in result:
             for follower in branch.state.my_board:
                 if follower.unique_id not in source_slots:
                     source_slots.append(follower.unique_id)
-        for source_uid in source_slots:
-            next_result: list[StochasticBranch] = []
+        result = run_sources(result, source_slots)
+
+        if entered_before is not None and trigger == "on_ally_follower_summon":
+            entered_slots: list[int] = []
+            # Recompute listeners after the unfiltered event: a Fanfare may
+            # have summoned an additional listener before the filtered pass.
+            listener_slots: list[int] = []
             for branch in result:
-                follower = next((f for f in branch.state.my_board if f.unique_id == source_uid), None)
-                if follower is None or follower.abilities_removed:
-                    next_result.append(branch)
-                    continue
-                rule = self.rules.get(follower.card_id, {})
-                next_result.extend(self._resolve_abilities_branches(branch.state, rule, "normal", trigger, source_uid=source_uid, probability=branch.probability, inherited_unsupported=branch.unsupported_ops, inherited_warnings=branch.warnings))
-            result = self._merge_stochastic(next_result)
+                for follower in branch.state.my_board:
+                    if follower.unique_id not in listener_slots:
+                        listener_slots.append(follower.unique_id)
+                    if follower.unique_id not in entered_before and follower.unique_id not in entered_slots:
+                        entered_slots.append(follower.unique_id)
+            for event_uid in entered_slots:
+                result = run_sources(result, listener_slots, event_uid=event_uid)
         return result
 
     def _chain_spellboost_branches(self, branches: list[StochasticBranch], *, source_uid: int) -> list[StochasticBranch]:
@@ -2132,23 +3929,96 @@ class EventInterpreter:
         return self._merge_stochastic(output)
 
     def _effects_branches(self, state: LethalState, effects: Any, source_uid: int, target_uid: Any = None, *, choice: Any = None) -> list[StochasticBranch]:
-        current = [StochasticBranch(1.0, state)]
+        # Keep the immediately preceding operation and its pre-state along
+        # every branch.  ``modify_previous_effect`` is a runtime fallback for
+        # textual ``instead`` relations; when the preceding operation was
+        # random, each branch still rolls back to that branch's own pre-state
+        # rather than replaying a sibling outcome.
+        records: list[tuple[StochasticBranch, Mapping[str, Any] | None, LethalState | None]] = [
+            (StochasticBranch(1.0, state), None, None)
+        ]
+
+        def merge_records(items: list[tuple[StochasticBranch, Mapping[str, Any] | None, LethalState | None]]) -> list[tuple[StochasticBranch, Mapping[str, Any] | None, LethalState | None]]:
+            merged: dict[tuple[Any, ...], tuple[StochasticBranch, Mapping[str, Any] | None, LethalState | None]] = {}
+            for branch, previous, previous_state in items:
+                if branch.probability <= 0:
+                    continue
+                key = (
+                    branch.state.state_key(),
+                    repr(previous) if previous is not None else None,
+                    previous_state.state_key() if previous_state is not None else None,
+                )
+                old = merged.get(key)
+                if old is None:
+                    merged[key] = (branch, previous, previous_state)
+                else:
+                    old_branch = old[0]
+                    merged[key] = (
+                        StochasticBranch(
+                            old_branch.probability + branch.probability,
+                            old_branch.state,
+                            tuple(sorted(set(old_branch.unsupported_ops) | set(branch.unsupported_ops))),
+                            old_branch.warnings if len(old_branch.warnings) <= len(branch.warnings) else branch.warnings,
+                        ),
+                        old[1],
+                        old[2],
+                    )
+            return list(merged.values())
+
         for effect in effects if isinstance(effects, (list, tuple)) else ():
             if not isinstance(effect, Mapping):
                 continue
-            next_branches: list[StochasticBranch] = []
-            for branch in current:
-                # Failed resource payments are atomic gates for the
-                # containing sequence.  Preserve the blocked branch for
-                # reporting but do not let later effects (damage/summon)
-                # resolve after the failed cost.
+            next_records: list[tuple[StochasticBranch, Mapping[str, Any] | None, LethalState | None]] = []
+            for branch, previous_effect, previous_state in records:
+                # Failed resource payments are atomic gates for the containing
+                # sequence.  Preserve the blocked branch for reporting but do
+                # not let later effects resolve after the failed cost.
                 if any(str(item).startswith("insufficient_resource:") for item in branch.unsupported_ops):
-                    next_branches.append(branch)
+                    next_records.append((branch, previous_effect, previous_state))
                     continue
+                if effect.get("op") == "modify_previous_effect":
+                    if previous_effect is None or previous_state is None:
+                        next_records.append((
+                            StochasticBranch(branch.probability, branch.state, tuple(sorted(set(branch.unsupported_ops) | {"modify_previous_effect_context"})), branch.warnings),
+                            previous_effect,
+                            previous_state,
+                        ))
+                        continue
+                    modified = self._runtime_previous_modifier(previous_effect, effect)
+                    if modified is None:
+                        next_records.append((
+                            StochasticBranch(branch.probability, branch.state, tuple(sorted(set(branch.unsupported_ops) | {f"modify_previous_effect:{effect.get('field')}"})), branch.warnings),
+                            previous_effect,
+                            previous_state,
+                        ))
+                        continue
+                    outcomes = self._effects_branches(previous_state.clone(), [modified], source_uid, target_uid, choice=choice)
+                    for outcome in outcomes:
+                        next_records.append((
+                            StochasticBranch(
+                                branch.probability * outcome.probability,
+                                outcome.state,
+                                tuple(sorted(set(branch.unsupported_ops) | set(outcome.unsupported_ops))),
+                                tuple(branch.warnings) + tuple(outcome.warnings),
+                            ),
+                            modified,
+                            previous_state,
+                        ))
+                    continue
+                before = branch.state.clone()
                 for outcome in self._effect_branches(branch.state, effect, source_uid, target_uid, choice=choice):
-                    next_branches.append(StochasticBranch(branch.probability * outcome.probability, outcome.state, tuple(sorted(set(branch.unsupported_ops) | set(outcome.unsupported_ops))), tuple(branch.warnings) + tuple(outcome.warnings)))
-            current = self._merge_stochastic(next_branches)
-        return current
+                    next_records.append((
+                        StochasticBranch(
+                            branch.probability * outcome.probability,
+                            outcome.state,
+                            tuple(sorted(set(branch.unsupported_ops) | set(outcome.unsupported_ops))),
+                            tuple(branch.warnings) + tuple(outcome.warnings),
+                        ),
+                        dict(effect),
+                        before,
+                    ))
+            records = merge_records(next_records)
+        return [item[0] for item in records]
 
     def _reanimate_candidates(self, state: LethalState, effect: Mapping[str, Any], cost: int, source_uid: int) -> list[tuple[int, LethalFollower]]:
         filters = effect.get("filters") if isinstance(effect.get("filters"), Mapping) else {}
@@ -2310,6 +4180,16 @@ class EventInterpreter:
                 selector_filters = selector.get("filters") if isinstance(selector.get("filters"), Mapping) else {}
                 if selector_side is None:
                     selector_side = selector_filters.get("side")
+                if branch.state.deck_replacement:
+                    hidden_total = max(1, int(branch.state.total_deck_count))
+                    next_branches.append(StochasticBranch(
+                        branch.probability,
+                        branch.state,
+                        tuple(sorted(set(branch.unsupported_ops) | {"transform_replaced_deck"})),
+                        branch.warnings,
+                    ))
+                    current = self._merge_stochastic(next_branches)
+                    continue
                 known = [
                     (int(card_id), int(number))
                     for card_id, number in branch.state.deck_distribution.items()
@@ -2349,12 +4229,38 @@ class EventInterpreter:
 
     def _effect_branches(self, state: LethalState, effect: Mapping[str, Any], source_uid: int, target_uid: Any = None, *, choice: Any = None) -> list[StochasticBranch]:
         op = effect.get("op")
+        if op == "auto_evolve":
+            target = effect.get("target") if isinstance(effect.get("target"), Mapping) else {}
+            target_scope = target.get("scope")
+            target_ids = [
+                uid
+                for side, index in self._target_indexes(state, target, target_uid, source_uid)
+                for uid in [
+                    (state.my_board if side == "ally" else state.enemy_board)[index].unique_id
+                ]
+            ]
+            if target_scope in ("self", "trigger_source") and not target_ids:
+                target_ids = [source_uid]
+            if not target_ids:
+                return [StochasticBranch(1.0, state, warnings=("auto_evolve target not found",))]
+            return self.auto_evolve_branches(
+                state,
+                target_ids[0],
+                super_evolve=effect.get("evolution_kind", "normal") == "super",
+            )
         if op == "reanimate":
             return self._reanimate_effect_branches(state, effect, source_uid)
         if op == "spellboost":
             return self._spellboost_effect_branches(state, effect, source_uid, target_uid)
         if op == "transform":
             return self._transform_effect_branches(state, effect, source_uid, target_uid, choice=choice)
+        if op == "progressive_sequence":
+            return self._progressive_effect_branches(state, effect, source_uid, target_uid, choice=choice)
+        if op == "invoke":
+            return self._invoke_effect_branches(state, effect, source_uid, target_uid, choice=choice)
+        if op in ("remove_keyword", "modify_previous_effect", "replace_deck"):
+            next_state, unsupported, warnings = self._effects(state, [effect], source_uid, target_uid, choice=choice)
+            return [StochasticBranch(1.0, next_state, tuple(sorted(unsupported)), tuple(warnings))]
         if op == "conditional":
             verdict = self._condition_met(state, effect.get("condition", {}))
             if verdict is None:
@@ -2386,15 +4292,30 @@ class EventInterpreter:
             # without a choice must remain incomplete rather than silently
             # inventing a random distribution.
             choices = effect.get("choices", ())
-            selected_choice = None
-            if choice is not None and isinstance(choices, (list, tuple)):
-                if isinstance(choice, int) and 0 <= choice < len(choices):
-                    selected_choice = choices[choice]
-                else:
-                    selected_choice = next((item for item in choices if isinstance(item, Mapping) and str(item.get("label")) == str(choice)), None)
-            if not isinstance(selected_choice, Mapping):
+            if not isinstance(choices, (list, tuple)) or not choices or choice is None:
                 return [StochasticBranch(1.0, state, ("mode_choice",))]
-            return self._effects_branches(state, selected_choice.get("effects", ()), source_uid, target_uid, choice=choice)
+            selected_values = list(choice) if isinstance(choice, (list, tuple)) and not all(isinstance(item, Mapping) for item in choice) else [choice]
+            selected_choices: list[Mapping[str, Any]] = []
+            for selected_value in selected_values:
+                selected_choice = None
+                if isinstance(selected_value, Mapping):
+                    selected_choice = selected_value
+                elif isinstance(selected_value, int) and 0 <= selected_value < len(choices):
+                    selected_choice = choices[selected_value]
+                else:
+                    selected_choice = next((item for item in choices if isinstance(item, Mapping) and str(item.get("label")) == str(selected_value)), None)
+                if isinstance(selected_choice, Mapping):
+                    selected_choices.append(selected_choice)
+            if not selected_choices:
+                return [StochasticBranch(1.0, state, ("mode_choice",))]
+            current = [StochasticBranch(1.0, state)]
+            for selected_choice in selected_choices:
+                next_branches: list[StochasticBranch] = []
+                for branch in current:
+                    for outcome in self._effects_branches(branch.state, selected_choice.get("effects", ()), source_uid, target_uid, choice=choice):
+                        next_branches.append(StochasticBranch(branch.probability * outcome.probability, outcome.state, tuple(sorted(set(branch.unsupported_ops) | set(outcome.unsupported_ops))), tuple(branch.warnings) + tuple(outcome.warnings)))
+                current = self._merge_stochastic(next_branches)
+            return current
         if op == "activate_all_mode_choices":
             # Super Skybound Art replaces a normal Mode choice with every
             # choice in sequence.  Resolve the nested effects through the
@@ -2481,18 +4402,6 @@ class EventInterpreter:
             return self._summon_branches(state, effect, source_uid)
         if op == "copy" and isinstance(effect.get("source"), Mapping) and effect["source"].get("selection") == "random":
             return self._copy_branches(state, effect, source_uid, target_uid, choice=choice)
-        if op == "auto_evolve":
-            target = effect.get("target") if isinstance(effect.get("target"), Mapping) else {"scope": "self"}
-            ids = [
-                (state.my_board if side == "ally" else state.enemy_board)[index].unique_id
-                for side, index in self._target_indexes(state, target, target_uid, source_uid)
-                if side == "ally"
-            ]
-            if not ids and target.get("scope") in ("self", "trigger_source"):
-                ids = [source_uid]
-            if not ids:
-                return [StochasticBranch(1.0, state, warnings=("auto_evolve target not found",))]
-            return self.evolve_branches(state, ids[0], super_evolve=effect.get("evolution_kind") == "super", target_uid=target_uid)
         # All non-random primitives use the same checked implementation as the
         # deterministic interpreter.  It may still report an explicitly
         # planned operation; such a branch is never treated as confirmed.
@@ -2534,6 +4443,11 @@ class EventInterpreter:
             output.append(("leader", None))
         if scope in ("enemy_follower", "any"):
             for follower in state.enemy_board:
+                # Ambush is untargetable by an enemy ability.  An explicit
+                # all-enemy area selector is not a target choice and therefore
+                # still includes the hidden follower.
+                if target.get("selection") not in ("all", "each") and self._source_is_ally(state, source_uid) and _has_keyword(follower, "ambush"):
+                    continue
                 if self._matches_target_filters(follower, "enemy", filters) and not ((filters.get("exclude_source") or filters.get("exclude_self")) and follower.unique_id == source_uid):
                     output.append(("enemy_follower", follower.unique_id))
         if scope in ("ally_follower", "any"):
@@ -2601,7 +4515,16 @@ class EventInterpreter:
         wanted_tribe = filters.get("tribe")
         if wanted_tribe:
             values = wanted_tribe if isinstance(wanted_tribe, (list, tuple)) else [wanted_tribe]
-            if not any(str(value).casefold() in {str(item).casefold() for item in tribes} for value in values):
+            actual_tribes: set[str] = set()
+            for item in tribes:
+                actual_tribes.add(str(item).casefold())
+                try:
+                    alias = _TRIBE_ALIASES.get(int(item))
+                except (TypeError, ValueError):
+                    alias = None
+                if alias:
+                    actual_tribes.add(alias.casefold())
+            if not any(str(value).casefold() in actual_tribes for value in values):
                 return False
         wanted_class = filters.get("class", filters.get("class_id"))
         if wanted_class is not None:
@@ -2636,6 +4559,20 @@ class EventInterpreter:
         for _ in range(max(0, int(count))):
             output: list[StochasticBranch] = []
             for branch in current:
+                if branch.state.deck_replacement:
+                    # The replacement deck is a named opaque template.  Its
+                    # next card cannot be inferred from the old distribution,
+                    # but drawing still consumes one slot from the public
+                    # count and remains explicitly incomplete.
+                    unknown_state = branch.state.clone()
+                    unknown_state.total_deck_count = max(0, unknown_state.total_deck_count - 1)
+                    output.append(StochasticBranch(
+                        branch.probability,
+                        unknown_state,
+                        tuple(sorted(set(branch.unsupported_ops) | {"draw_replaced_deck"})),
+                        branch.warnings,
+                    ))
+                    continue
                 visible_total = sum(max(0, int(n)) for n in branch.state.deck_distribution.values())
                 total = max(0, int(branch.state.total_deck_count), visible_total)
                 selector = {"filters": (effect.get("target", {}).get("filters", {}) if isinstance(effect.get("target"), Mapping) else {})}
@@ -2706,6 +4643,13 @@ class EventInterpreter:
             if distinct_by == "card_id":
                 candidates = [(cid, n) for cid, n in candidates if cid not in selected_ids]
             known_total = sum(n for _, n in candidates)
+            if branch.state.deck_replacement:
+                return [StochasticBranch(
+                    branch.probability,
+                    branch.state,
+                    tuple(sorted(set(branch.unsupported_ops) | {"summon_replaced_deck"})),
+                    branch.warnings,
+                )]
             # ``total_deck_count`` can exceed the visible distribution when
             # Tracker has not identified every card in the deck.  Keep that
             # residual as an explicit incomplete branch instead of
@@ -3002,11 +4946,24 @@ class EventInterpreter:
         def matches(follower: LethalFollower, side: str) -> bool:
             if (filters.get("exclude_source") or filters.get("exclude_self")) and follower.unique_id == source_uid:
                 return False
+            # Ambush blocks enemy-targeted choices, but not effects that apply
+            # to every permanent.  This makes targeted damage/buffs safe while
+            # preserving the game's area-effect semantics.
+            if side == "enemy" and selection not in ("all", "each") and self._source_is_ally(state, source_uid) and _has_keyword(follower, "ambush"):
+                return False
             return self._matches_follower_filters(follower, side, filters)
 
         boards: list[tuple[str, list[LethalFollower]]] = []
         if scope in ("self", "trigger_source", "previous_copy", "previous_summon", "previous_add", "ally_follower"):
             boards.append(("ally", state.my_board))
+        elif scope == "previous_target":
+            # ``previous_target`` is a relation to the UID selected by the
+            # preceding target operation (for example, "remove Ward from
+            # it").  It may point at either side of the field; unlike
+            # ``self`` there is no safe fallback when the caller did not
+            # provide that UID, so the candidate list is intentionally empty
+            # in that case below.
+            boards.extend((("ally", state.my_board), ("enemy", state.enemy_board)))
         elif scope == "enemy_follower":
             boards.append(("enemy", state.enemy_board))
         elif scope == "any":
@@ -3021,6 +4978,12 @@ class EventInterpreter:
                 candidates = [(i, f) for i, f in candidates if f.unique_id == source_uid]
             elif scope in ("previous_copy", "previous_summon", "previous_add"):
                 candidates = [(i, f) for i, f in candidates if f.unique_id == state.last_created_uid]
+            elif scope == "previous_target":
+                # A selected target is represented by ``target_uid``.  Never
+                # guess from ``last_created_uid`` here: doing so can remove a
+                # keyword from the wrong permanent when a preceding effect
+                # created a token between selection and the relation.
+                candidates = [(i, f) for i, f in candidates if requested is not None and f.unique_id in requested]
             if requested is not None:
                 candidates = [(i, f) for i, f in candidates if f.unique_id in requested]
             elif selection not in ("all", "each"):
@@ -3035,10 +4998,21 @@ class EventInterpreter:
         return result
 
     @staticmethod
+    def _source_is_ally(state: LethalState, source_uid: int) -> bool:
+        # The interpreter only executes player-owned card rules.  Spell and
+        # delayed effects may use a synthetic source UID (the card has already
+        # left hand), so an unknown UID is still an allied source unless it is
+        # explicitly an enemy-board entity.
+        if any(item.unique_id == source_uid for item in state.enemy_board):
+            return False
+        return True
+
+    @staticmethod
     def _next_instance_uid(state: LethalState) -> int:
         values = [f.unique_id for f in (*state.my_board, *state.enemy_board)]
         values.extend(c.unique_id for c in state.hand)
         values.extend(int(item.get("unique_id")) for item in state.crest_instances if isinstance(item, Mapping) and str(item.get("unique_id", "")).isdigit())
+        values.extend(int(item.get("unique_id")) for item in state.enemy_crest_instances if isinstance(item, Mapping) and str(item.get("unique_id", "")).isdigit())
         values.extend(f.unique_id for f in state.destroyed_this_match)
         return max(values, default=0) + 1
 
@@ -3118,13 +5092,24 @@ class EventInterpreter:
     def _hand_card_for_card(self, card_id: int, unique_id: int) -> LethalHandCard | None:
         template = self.card_db.get(card_id)
         if template is not None:
-            return replace(template, unique_id=unique_id, has_spell_boost=template.has_spell_boost or self._card_has_trigger(card_id, "on_spellboost"))
+            static = self._static_keywords(card_id, template)
+            return replace(
+                template,
+                unique_id=unique_id,
+                has_spell_boost=template.has_spell_boost or self._card_has_trigger(card_id, "on_spellboost"),
+                statuses=tuple(sorted(set(template.statuses) | static)),
+                has_bane=template.has_bane or "bane" in static,
+                has_drain=template.has_drain or "drain" in static,
+                has_ambush=template.has_ambush or "ambush" in static,
+                buff=template.buff,
+            )
         meta = self.catalog.get(card_id, {})
         if not meta:
             return None
         names = meta.get("name", {}) if isinstance(meta.get("name"), Mapping) else {}
         stats = meta.get("stats", {}) if isinstance(meta.get("stats"), Mapping) else {}
         type_map = {"follower": 1, "amulet": 2, "countdown_amulet": 3, "spell": 4}
+        static = self._static_keywords(card_id)
         return LethalHandCard(
             unique_id=unique_id,
             card_id=card_id,
@@ -3135,6 +5120,10 @@ class EventInterpreter:
             life=int(stats.get("life", 0) or 0),
             tribes=tuple(str(item) for item in (meta.get("tribes", ()) if isinstance(meta.get("tribes"), (list, tuple)) else ())),
             has_spell_boost=self._card_has_trigger(card_id, "on_spellboost"),
+            statuses=tuple(sorted(static)),
+            has_bane="bane" in static,
+            has_drain="drain" in static,
+            has_ambush="ambush" in static,
         )
 
     def _copy_source_candidates(self, state: LethalState, source: Mapping[str, Any], target_uid: Any, source_uid: int) -> list[LethalFollower | LethalHandCard]:
@@ -3211,10 +5200,15 @@ class EventInterpreter:
         if card is None:
             return None
         rule = self.rules.get(card_id, {})
-        static = rule.get("static_keywords", ()) if isinstance(rule, Mapping) else ()
+        static = self._static_keywords(card_id, card)
         storm = card.static_storm or "storm" in static
         rush = card.static_rush or "rush" in static or storm
         countdown = rule.get("countdown") if isinstance(rule, Mapping) and isinstance(rule.get("countdown"), (int, float)) else None
+        default_attacks = rule.get("default_attacks", 1) if isinstance(rule, Mapping) else 1
+        try:
+            default_attacks = max(1, int(default_attacks))
+        except (TypeError, ValueError):
+            default_attacks = 1
         return LethalFollower(
             unique_id=unique_id,
             card_id=card_id,
@@ -3226,13 +5220,18 @@ class EventInterpreter:
             is_ward="ward" in static,
             can_attack_leader=storm,
             can_attack_field=rush,
-            attacks_left=1,
+            attacks_left=default_attacks,
+            statuses=tuple(sorted(set(str(item) for item in static))),
             countdown=int(countdown) if countdown is not None else None,
             base_cost=card.cost,
             spell_boost_count=card.spell_boost_count,
             has_spell_boost=card.has_spell_boost or self._card_has_trigger(card_id, "on_spellboost"),
             variable_x=card.variable_x,
             supplement_info=card.supplement_info,
+            has_bane="bane" in static,
+            has_drain="drain" in static,
+            has_ambush="ambush" in static,
+            buff=card.buff,
         )
 
     def _resolve_last_words(self, state: LethalState, follower: LethalFollower) -> InterpreterResult:

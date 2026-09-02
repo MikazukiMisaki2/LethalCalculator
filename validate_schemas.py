@@ -31,9 +31,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", type=Path, default=ROOT / "fixtures" / "catalog_minimal.json")
     parser.add_argument("--rules", type=Path, default=ROOT / "fixtures" / "rules_faith_crest.json")
+    parser.add_argument(
+        "--tracker",
+        type=Path,
+        action="append",
+        default=[],
+        help="Validate one or more public Tracker snapshot fixtures",
+    )
     args = parser.parse_args()
     validate(args.catalog, ROOT / "schemas" / "card_catalog.schema.json")
     validate(args.rules, ROOT / "schemas" / "card_rules_v2.schema.json")
+    for tracker_path in args.tracker:
+        validate(tracker_path, ROOT / "schemas" / "tracker_snapshot.schema.json")
     return 0
 
 

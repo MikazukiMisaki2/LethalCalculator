@@ -345,6 +345,6 @@ python -m unittest discover -s . -p "test\_\*.py"
 * `instead` 在同源 Enhance、Skybound Art、Super-Evolve 或明确条件分支中会物化为完整替代效果；无法唯一定位基础效果时保留 `modify_previous_effect` 并标记 `partial`。
 * 补齐 `on_draw`/`on_discard`、`gain_status`、`set_stat`、`add_to_zone`、`replace_deck` 等 v2 契约字段，并让 `merge_card_rules.py` 输出 `ruleset_revision: 2`。
 * `ordered_split` 保持敌方战场顺序分配语义；随机目标和未实现操作继续由运行时返回 `INCOMPLETE`，不会静默当作确定结果。
-* 当前 904 张卡的编译统计为 `generated=885`、`partial=9`、`unsupported=10`；修正了 `Enhanced Puppet` 被误识别为 Enhance 模式的问题，并清理了已完整编译的中文重复标记。剩余 partial 主要是动态复制/随机牌引用、临时/延迟能力，或仍缺少可确认的卡牌实体。生成规则中若使用支持矩阵标为 `planned` 的操作，运行时仍会显式返回 `INCOMPLETE`，不会伪装成确定斩杀。
+* 当前默认英文主文本管线的 904 张卡编译统计为 `generated=904`、`partial=0`、`unsupported=0`；修正了 `Enhanced Puppet` 被误识别为 Enhance 模式的问题，清理了已完整编译的中文重复标记，并为多选 Mode、Golem 触发器和 Strike 等事件补齐了结构化输出。文本解析报告仍保留中文缺失翻译/展示句的审计计数；生成规则中若使用支持矩阵标为 `planned` 的操作，或运行时缺少公开随机池，解释器仍会显式返回 `INCOMPLETE`，不会伪装成确定斩杀。
 * 10804110 的三个模式选项已分别编译为 follower/amulet/crest 分支；10224120 的触发能力已拆分为 `trigger_source` 状态、敌方主战者伤害和己方主战者回复，但其“召唤敌方 Knight 复制”仍保留未解析引用。
 * 当前默认文件：`data/generated/card_rules_v2.json`；Schema 与支持矩阵分别为 `schemas/card_rules_v2.schema.json`、`schemas/card_rules_v2_support.json`。

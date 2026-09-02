@@ -47,6 +47,14 @@ def main() -> int:
     parser.add_argument("--catalog-schema", type=Path, default=ROOT / "schemas" / "card_catalog.schema.json")
     parser.add_argument("--rules-schema", type=Path, default=ROOT / "schemas" / "card_rules_v2.schema.json")
     parser.add_argument("--support", type=Path, default=ROOT / "schemas" / "card_rules_v2_support.json")
+    parser.add_argument(
+        "--tracker",
+        type=Path,
+        action="append",
+        default=[],
+        help="also validate public Tracker snapshot(s) against tracker_snapshot.schema.json",
+    )
+    parser.add_argument("--tracker-schema", type=Path, default=ROOT / "schemas" / "tracker_snapshot.schema.json")
     args = parser.parse_args()
 
     catalog = _load(args.catalog)
@@ -55,6 +63,15 @@ def main() -> int:
     rules_schema = _load(args.rules_schema)
     support = _load(args.support)
     failures: list[str] = []
+
+    tracker_schema = _load(args.tracker_schema) if args.tracker else None
+    if tracker_schema is not None:
+        for tracker_path in args.tracker:
+            tracker_errors = _schema_errors(_load(tracker_path), tracker_schema)
+            if tracker_errors:
+                failures.extend(f"Tracker {tracker_path.name}: {error}" for error in tracker_errors)
+            else:
+                print(f"OK {tracker_path.name} against {args.tracker_schema.name}")
 
     catalog_errors = _schema_errors(catalog, catalog_schema)
     if catalog_errors:

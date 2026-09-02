@@ -15,6 +15,7 @@ _DEFAULT_TRIGGERS = frozenset(
     {
         "on_play",
         "on_fanfare",
+        "on_invoke",
         "on_evolve",
         "on_super_evolve",
         "on_ally_follower_evolve",

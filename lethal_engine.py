@@ -28,6 +28,194 @@ class LethalEngine:
         else:
             return LethalResult("NO_LETHAL", 0.0, [])
 
+    def max_damage(self, state: LethalState, *, node_limit: int = 50000) -> Tuple[int, List[str]]:
+        """Return the highest leader damage reachable in this turn.
+
+        This is a secondary analysis used when no lethal route was found.  It
+        deliberately explores the same legal actions as :meth:`solve`, but it
+        does not apply the lethal-only pruning bound and therefore can report
+        the best non-lethal line.  Random effects are evaluated by taking the
+        highest reachable branch (the UI labels the result as theoretical),
+        while unsupported branches remain visible in the returned route.
+
+        ``node_limit`` is a safety valve for live Tracker refreshes.  The
+        default is generous for a one-turn hand search; callers can lower it
+        for a constrained overlay.  The route contains an explicit incomplete
+        marker if the limit is reached, so the UI never presents a bounded
+        search as a guaranteed optimum.
+        """
+        try:
+            limit = max(1, int(node_limit))
+        except (TypeError, ValueError):
+            limit = 50000
+        # Do not mutate the live Tracker-derived state or let historical
+        # route labels participate in memoisation.  Every successor receives
+        # a fresh action label below.
+        working = state.clone()
+        working.history = []
+        memo: Dict[Tuple[int, Tuple], Tuple[int, List[str]]] = {}
+        nodes = 0
+        truncated = False
+
+        def append_action(next_state: LethalState, label: str, unsupported: Tuple[str, ...] = ()) -> None:
+            next_state.history = []
+            next_state.history.append(label)
+            for gap in unsupported:
+                next_state.history.append(f"[incomplete: {gap}]")
+
+        def search_max(current: LethalState, depth: int) -> Tuple[int, List[str]]:
+            nonlocal nodes, truncated
+            if current.enemy_hp <= 0 or depth >= self.max_depth:
+                return (0, [])
+            key = (depth, current.state_key())
+            cached = memo.get(key)
+            if cached is not None:
+                return cached[0], list(cached[1])
+            nodes += 1
+            if nodes > limit:
+                truncated = True
+                return (0, [])
+
+            best_damage = 0
+            best_suffix: List[str] = []
+
+            def consider(next_state: LethalState, label: str, unsupported: Tuple[str, ...] = ()) -> None:
+                nonlocal best_damage, best_suffix
+                if next_state is current:
+                    # Interpreter rejection (illegal target/mode/resource)
+                    # returns the original object.  It must never become a
+                    # zero-cost search edge.
+                    return
+                immediate = max(0, int(current.enemy_hp) - int(next_state.enemy_hp))
+                append_action(next_state, label, unsupported)
+                future, suffix = search_max(next_state, depth + 1)
+                total = immediate + future
+                if total > best_damage:
+                    best_damage = total
+                    best_suffix = list(next_state.history) + list(suffix)
+
+            # Engage/activation effects can deal damage or create additional
+            # attackers, so they are part of the maximum-damage action set.
+            for source in list(current.my_board):
+                if source.countdown is None:
+                    continue
+                if current.legal_actions_known:
+                    allowed = set(current.legal_actions.get("can_activation_field_cards", ())) | set(current.legal_actions.get("can_activation_field_cards_with_extra_pp", ()))
+                    if source.unique_id not in allowed:
+                        continue
+                rule = self.interpreter.rules.get(source.card_id, {})
+                abilities = [
+                    ability
+                    for mode_info in rule.get("modes", ()) if isinstance(mode_info, dict)
+                    for ability in mode_info.get("abilities", ())
+                    if isinstance(ability, dict) and ability.get("trigger") == "on_engage"
+                ]
+                if not abilities:
+                    continue
+                engage_cost = max((int(item.get("cost", 0) or 0) for item in abilities), default=0)
+                if self.interpreter._available_pp(current) < engage_cost:
+                    continue
+                targets = self._rule_target_options(current, rule, "normal", "on_engage") or [None]
+                for target_uid in targets:
+                    for branch in self.interpreter.engage_branches(current, source.unique_id, target_uid=target_uid):
+                        if branch.state is current and branch.warnings:
+                            continue
+                        label = f"【启动】启动 {source.name}"
+                        consider(branch.state, label, tuple(branch.unsupported_ops))
+
+            # Face attacks are legal only when no Ward blocks them; the
+            # interpreter still enforces the precise AttackTargets projection.
+            if not any(f.is_ward for f in current.enemy_board):
+                for follower in list(current.my_board):
+                    if not follower.can_attack_leader or follower.attacks_left <= 0 or follower.atk <= 0:
+                        continue
+                    resolved = self.interpreter.attack_leader(current, follower.unique_id)
+                    consider(resolved.state, f"【随从走脸】{follower.name} 攻击主战者", tuple(resolved.unsupported_ops))
+
+            # Evolve and super-evolve consume separate resources and may have
+            # targeted/random effects of their own.
+            for super_evolve, points, label_prefix in (
+                (True, current.sep, "超进化"),
+                (False, current.ep, "进化"),
+            ):
+                if points <= 0:
+                    continue
+                # A live Tracker snapshot exposes whether the single
+                # player-initiated evolution for this turn was already used.
+                # Keep this constraint across hypothetical branches; the
+                # interpreter applies the same guard as a final authority.
+                if current.manual_evolutions_this_turn > 0:
+                    continue
+                # Tracker's evolve-turn thresholds remain authoritative after
+                # LegalActions is invalidated on a hypothetical predecessor.
+                if not self.interpreter._evolution_unlocked(current, super_evolve=super_evolve):
+                    continue
+                if current.legal_actions_known:
+                    allowed = current.legal_super_evolve_uids if super_evolve else current.legal_evolve_uids
+                else:
+                    allowed = ()
+                for follower in list(current.my_board):
+                    if follower.is_evolved or (current.legal_actions_known and follower.unique_id not in allowed):
+                        continue
+                    rule = self.interpreter.rules.get(follower.card_id, {})
+                    trigger = "on_super_evolve" if super_evolve else "on_evolve"
+                    targets = self._rule_target_options(current, rule, "normal", trigger) or [None]
+                    for target_uid in targets:
+                        for branch in self.interpreter.evolve_branches(current, follower.unique_id, super_evolve=super_evolve, target_uid=target_uid):
+                            if branch.state is current and branch.warnings:
+                                continue
+                            new_follower = next((item for item in branch.state.my_board if item.unique_id == follower.unique_id), follower)
+                            consider(branch.state, f"【{label_prefix}】{label_prefix} {follower.name} (Atk变为: {new_follower.atk})", tuple(branch.unsupported_ops))
+
+            # Follower combat is enumerated in board order.  The interpreter
+            # rejects non-Ward targets while a Ward remains, and also applies
+            # Bane/Drain/Last Words exactly as normal lethal search does.
+            for follower in list(current.my_board):
+                if not follower.can_attack_field or follower.attacks_left <= 0 or follower.atk <= 0:
+                    continue
+                for target in list(current.enemy_board):
+                    resolved = self.interpreter.attack_follower(current, follower.unique_id, target.unique_id)
+                    consider(resolved.state, f"【随从解场】{follower.name} 攻击 敌方{target.name}", tuple(resolved.unsupported_ops))
+
+            # Every legal play mode is a separate action.  We always use the
+            # branch API here, even for deterministic cards, so random target,
+            # draw, reanimate, and summon effects are available to the
+            # maximum-damage analysis without duplicating interpreter logic.
+            for card in list(current.hand):
+                for mode, cost in self.interpreter.available_modes(card, current):
+                    if card.type == 1 and mode in ("normal", "enhance") and len(current.my_board) >= 5:
+                        continue
+                    if card.req_rally > 0 and current.rally < card.req_rally:
+                        continue
+                    if card.req_cemetery > 0 and current.cemetery < card.req_cemetery:
+                        continue
+                    if card.req_overflow and not (current.is_awakening or current.max_pp >= 7):
+                        continue
+                    if self.interpreter._resource_preflight(current, self.interpreter.rules.get(card.card_id, {}), mode, source_uid=card.unique_id) is not None:
+                        continue
+                    choices = self._choice_options(card, mode) if self._card_has_choice_rule(card, mode) else [None]
+                    if not choices:
+                        choices = [None]
+                    targets = self._target_options(current, card, mode)
+                    for choice in choices:
+                        for target_uid in targets:
+                            for branch in self.interpreter.play_branches(current, card.unique_id, mode=mode, target_uid=target_uid, choice=choice):
+                                if branch.state is current and branch.warnings:
+                                    continue
+                                mode_tag = f" [{mode}]" if mode != "normal" else ""
+                                choice_tag = f" 选项{choice}" if choice is not None else ""
+                                target_tag = f" -> 目标 {target_uid}" if target_uid is not None else ""
+                                consider(branch.state, f"【使用卡牌】打出 {card.name}{mode_tag}{choice_tag}{target_tag} (花费 {cost} PP)", tuple(branch.unsupported_ops))
+
+            result = (best_damage, best_suffix)
+            memo[key] = (result[0], list(result[1]))
+            return result[0], list(result[1])
+
+        damage, sequence = search_max(working, 0)
+        if truncated:
+            sequence = list(sequence) + ["[incomplete: max-damage search limit reached]"]
+        return int(damage), sequence
+
     def _can_possibly_kill(self, state: LethalState) -> bool:
         potential = sum(f.atk * f.attacks_left for f in state.my_board if f.atk > 0)
         
@@ -56,10 +244,12 @@ class LethalEngine:
             available_damages.sort(reverse=True)
             potential += sum(available_damages[:total_draws])
 
-        # 超进化 +3 攻，普通进化 +2 攻
-        if state.sep > 0:
+        # Evolution resources are independent.  Include only points whose
+        # Tracker unlock turn has arrived; otherwise a locked SEP could both
+        # inflate the bound and hide an actually-available ordinary EP path.
+        if state.sep > 0 and state.manual_evolutions_this_turn <= 0 and self.interpreter._evolution_unlocked(state, super_evolve=True):
             potential += 3
-        elif state.ep > 0:
+        if state.ep > 0 and state.manual_evolutions_this_turn <= 0 and self.interpreter._evolution_unlocked(state, super_evolve=False):
             potential += 2
 
         return potential >= state.enemy_hp
@@ -109,6 +299,10 @@ class LethalEngine:
         for source in list(state.my_board):
             if source.countdown is None:
                 continue
+            if state.legal_actions_known:
+                allowed_engage = set(state.legal_actions.get("can_activation_field_cards", ())) | set(state.legal_actions.get("can_activation_field_cards_with_extra_pp", ()))
+                if source.unique_id not in allowed_engage:
+                    continue
             rule = self.interpreter.rules.get(source.card_id, {})
             abilities = [a for m in rule.get("modes", ()) for a in m.get("abilities", ()) if isinstance(a, dict) and a.get("trigger") == "on_engage"]
             if not abilities:
@@ -128,6 +322,11 @@ class LethalEngine:
                     branch_gaps: set[str] = set()
                     best_branch_sub_prob = -1.0
                     for branch in branches:
+                        if branch.state is state and branch.warnings:
+                            # A rejected Engage action is represented by the
+                            # unchanged input state; it must not become a
+                            # search prefix.
+                            continue
                         next_s = branch.state
                         if branch.unsupported_ops:
                             self._mark_result_gaps(next_s, branch.unsupported_ops)
@@ -146,6 +345,8 @@ class LethalEngine:
                     prob, path = aggregate, sample_path
                 else:
                     resolved = self.interpreter.engage(state, source.unique_id, target_uid=engage_target)
+                    if resolved.state is state:
+                        continue
                     next_s = resolved.state
                     self._mark_result_gaps(next_s, resolved.unsupported_ops)
                     next_s.history.append(f"【启动】启动 {source.name} (花费 {engage_cost} PP, 倒计时: {source.countdown}->{next((f.countdown for f in next_s.my_board if f.unique_id == source.unique_id), source.countdown)})")
@@ -163,9 +364,16 @@ class LethalEngine:
             for idx, f in enumerate(state.my_board):
                 if f.can_attack_leader and f.attacks_left > 0 and f.atk > 0:
                     resolved = self.interpreter.attack_leader(state, f.unique_id)
+                    # A live Tracker legality check returns the original state
+                    # when the attack is forbidden.  Do not recurse from that
+                    # unchanged state: doing so could prepend a rejected
+                    # action to an otherwise valid route.
+                    if resolved.state is state:
+                        continue
                     next_s = resolved.state
                     self._mark_rule_gap(next_s, f.card_id)
-                    next_s.history.append(f"【随从走脸】{f.name} 攻击主战者 (造成 {f.atk} 伤, 敌HP剩: {next_s.enemy_hp})")
+                    dealt = max(0, int(state.enemy_hp) - int(next_s.enemy_hp))
+                    next_s.history.append(f"【随从走脸】{f.name} 攻击主战者 (造成 {dealt} 伤, 敌HP剩: {next_s.enemy_hp})")
                     prob, path = self._search(next_s, depth + 1)
                     if prob > best_prob:
                         best_prob, best_path = prob, path
@@ -177,8 +385,10 @@ class LethalEngine:
         # 2. 进化 / 超进化（区分 SEP +3/+3 与 EP +2/+2）
         # -------------------------------------------------------------
         # 2A: 超进化 (SEP) -> +3/+3
-        if state.sep > 0:
+        if state.sep > 0 and state.manual_evolutions_this_turn <= 0 and self.interpreter._evolution_unlocked(state, super_evolve=True):
             for idx, f in enumerate(state.my_board):
+                if state.legal_actions_known and f.unique_id not in state.legal_super_evolve_uids:
+                    continue
                 if not f.is_evolved:
                     rule = self.interpreter.rules.get(f.card_id, {})
                     options = [None] if self._trigger_has_stochastic(f.card_id, "on_super_evolve") else self._rule_target_options(state, rule, "normal", "on_super_evolve")
@@ -191,8 +401,10 @@ class LethalEngine:
                                 return 1.0, best_path
 
         # 2B: 普通进化 (EP) -> +2/+2
-        if state.ep > 0:
+        if state.ep > 0 and state.manual_evolutions_this_turn <= 0 and self.interpreter._evolution_unlocked(state, super_evolve=False):
             for idx, f in enumerate(state.my_board):
+                if state.legal_actions_known and f.unique_id not in state.legal_evolve_uids:
+                    continue
                 if not f.is_evolved:
                     rule = self.interpreter.rules.get(f.card_id, {})
                     options = [None] if self._trigger_has_stochastic(f.card_id, "on_evolve") else self._rule_target_options(state, rule, "normal", "on_evolve")
@@ -215,6 +427,11 @@ class LethalEngine:
                             continue
 
                         resolved = self.interpreter.attack_follower(state, f.unique_id, state.enemy_board[e_idx].unique_id)
+                        if resolved.state is state:
+                            # Target was not in AttackTargets (or another
+                            # combat precondition failed); it is not a legal
+                            # branch of the current snapshot.
+                            continue
                         next_s = resolved.state
                         self._mark_rule_gap(next_s, f.card_id)
                         target = state.enemy_board[e_idx]
@@ -257,49 +474,43 @@ class LethalEngine:
                     choice_path: List[str] = []
                     for selected_choice in self._choice_options(card, mode):
                         for target_uid in self._target_options(state, card, mode):
-                            # A Mode is a player decision, but the selected
-                            # payload may itself contain a random effect
-                            # (for example Mode 2: Reanimate (2)).  Keep the
-                            # decision deterministic while expanding only the
-                            # chosen payload's stochastic outcomes; routing
-                            # the whole card through ``play_branches`` without
-                            # this choice would leave the mode marker
-                            # unresolved and under-count lethal lines.
-                            if self._choice_has_stochastic_effects(selected_choice):
-                                branches = self.interpreter.play_branches(
-                                    state,
-                                    card.unique_id,
-                                    mode=mode,
-                                    target_uid=target_uid,
-                                    choice=selected_choice,
+                            # A Mode is a player decision, while its selected
+                            # payload can still contain random targets (Baal's
+                            # Mode 1 buffs another random ally).  Always use
+                            # the branch API here so deterministic choices and
+                            # nested stochastic effects share one path and no
+                            # random target is silently downgraded to an
+                            # unsupported deterministic operation.
+                            branches = self.interpreter.play_branches(
+                                state,
+                                card.unique_id,
+                                mode=mode,
+                                target_uid=target_uid,
+                                choice=selected_choice,
+                            )
+                            selected_probability = 0.0
+                            selected_path: List[str] = []
+                            selected_gaps: set[str] = set()
+                            best_branch_sub_prob = -1.0
+                            for branch in branches:
+                                next_s = branch.state
+                                if branch.unsupported_ops:
+                                    self._mark_result_gaps(next_s, branch.unsupported_ops)
+                                    selected_gaps.update(branch.unsupported_ops)
+                                next_s.history.append(
+                                    f"【随机效果】打出 {card.name} [{mode}] 选项{selected_choice} "
+                                    f"(花费 {cost_to_pay} PP, 分支概率 {branch.probability*100:.2f}%)"
                                 )
-                                selected_probability = 0.0
-                                selected_path: List[str] = []
-                                selected_gaps: set[str] = set()
-                                best_branch_sub_prob = -1.0
-                                for branch in branches:
-                                    next_s = branch.state
-                                    if branch.unsupported_ops:
-                                        self._mark_result_gaps(next_s, branch.unsupported_ops)
-                                        selected_gaps.update(branch.unsupported_ops)
-                                    next_s.history.append(
-                                        f"【随机效果】打出 {card.name} [{mode}] 选项{selected_choice} "
-                                        f"(花费 {cost_to_pay} PP, 分支概率 {branch.probability*100:.2f}%)"
-                                    )
-                                    sub_prob, sub_path = self._search(next_s, depth + 1)
-                                    selected_probability += branch.probability * sub_prob
-                                    if sub_prob > 0 and sub_prob > best_branch_sub_prob:
-                                        selected_path = sub_path
-                                        best_branch_sub_prob = sub_prob
-                                if selected_gaps and selected_probability > 0:
-                                    selected_path = list(selected_path) + [
-                                        f"[incomplete: stochastic:{gap}]" for gap in sorted(selected_gaps)
-                                    ]
-                                probability, path = selected_probability, selected_path
-                            else:
-                                probability, path = self._play_action(
-                                    state, card, mode, cost_to_pay, target_uid, depth=depth, choice=selected_choice
-                                )
+                                sub_prob, sub_path = self._search(next_s, depth + 1)
+                                selected_probability += branch.probability * sub_prob
+                                if sub_prob > 0 and sub_prob > best_branch_sub_prob:
+                                    selected_path = sub_path
+                                    best_branch_sub_prob = sub_prob
+                            if selected_gaps and selected_probability > 0:
+                                selected_path = list(selected_path) + [
+                                    f"[incomplete: stochastic:{gap}]" for gap in sorted(selected_gaps)
+                                ]
+                            probability, path = selected_probability, selected_path
                             if probability > choice_prob:
                                 choice_prob, choice_path = probability, path
                     if choice_prob > best_prob:
@@ -445,6 +656,8 @@ class LethalEngine:
                     return True
                 if has_random(effect.get("else_effects", ())):
                     return True
+                if any(has_random(item.get("effects", ())) for item in effect.get("steps", ()) if isinstance(item, dict)):
+                    return True
                 if any(has_random(item.get("effects", ())) for item in effect.get("choices", ()) if isinstance(item, dict)):
                     return True
             return False
@@ -471,6 +684,8 @@ class LethalEngine:
                     return True
                 if has_random(effect.get("effects", ())) or has_random(effect.get("else_effects", ())):
                     return True
+                if any(has_random(item.get("effects", ())) for item in effect.get("steps", ()) if isinstance(item, dict)):
+                    return True
             return False
         return any(has_random(a.get("effects", ())) for m in rule.get("modes", ()) if isinstance(m, dict) for a in m.get("abilities", ()) if isinstance(a, dict) and a.get("trigger") == trigger)
 
@@ -482,6 +697,12 @@ class LethalEngine:
             best_branch_probability = -1.0
             branch_gaps: set[str] = set()
             for branch in branches:
+                if branch.state is state and branch.warnings:
+                    # ``evolve_branches`` uses the original state for a
+                    # rejected legal-action request.  Treat it as no branch,
+                    # otherwise the search can report a forbidden evolve in
+                    # its prefix.
+                    continue
                 next_state = branch.state
                 self._mark_result_gaps(next_state, branch.unsupported_ops)
                 new_follower = next((item for item in next_state.my_board if item.unique_id == follower.unique_id), follower)
@@ -498,6 +719,8 @@ class LethalEngine:
                 selected_path = list(selected_path) + [f"[incomplete: stochastic:{gap}]" for gap in sorted(branch_gaps)]
             return total, selected_path
         resolved = self.interpreter.evolve(state, follower.unique_id, super_evolve=super_evolve, target_uid=target_uid)
+        if resolved.state is state:
+            return 0.0, []
         next_state = resolved.state
         self._mark_result_gaps(next_state, resolved.unsupported_ops)
         new_follower = next((item for item in next_state.my_board if item.unique_id == follower.unique_id), follower)
@@ -507,6 +730,8 @@ class LethalEngine:
 
     def _play_action(self, state: LethalState, card: LethalHandCard, mode: str, cost: int, target_uid: object, *, depth: int, choice: object = None) -> Tuple[float, List[str]]:
         resolved = self.interpreter.play(state, card.unique_id, mode=mode, target_uid=target_uid, choice=choice)
+        if resolved.state is state:
+            return 0.0, []
         next_state = resolved.state
         if resolved.unsupported_ops:
             self._mark_result_gaps(next_state, resolved.unsupported_ops)
@@ -537,6 +762,8 @@ class LethalEngine:
     @staticmethod
     def _choice_has_stochastic_effects(choice: object) -> bool:
         """Return whether one concrete Mode payload needs branch expansion."""
+        if isinstance(choice, (list, tuple)):
+            return any(LethalEngine._choice_has_stochastic_effects(item) for item in choice)
         if not isinstance(choice, dict):
             return False
 
@@ -577,7 +804,18 @@ class LethalEngine:
                 if not isinstance(effect, dict):
                     continue
                 if effect.get("op") == "mode_choice":
-                    return [item.get("label", i) for i, item in enumerate(effect.get("choices", ())) if isinstance(item, dict)]
+                    labels = [item.get("label", i) for i, item in enumerate(effect.get("choices", ())) if isinstance(item, dict)]
+                    raw_count = effect.get("selection_count", 1)
+                    try:
+                        selection_count = max(1, int(raw_count))
+                    except (TypeError, ValueError):
+                        selection_count = 1
+                    if selection_count > 1:
+                        # A multi-Mode action is one player decision.  Return
+                        # combinations as immutable tuples so the interpreter
+                        # can apply every selected branch exactly once.
+                        return list(combinations(labels, min(selection_count, len(labels))))
+                    return labels
                 found = find(effect.get("effects", ()))
                 if found:
                     return found
@@ -597,10 +835,24 @@ class LethalEngine:
             state.history.append(f"[incomplete: {gap}]")
 
     def _target_options(self, state: LethalState, card: LethalHandCard, mode: str | bool) -> List[object]:
-        """Return target branches for deterministic enemy-follower effects."""
+        """Return target branches for deterministic play-time effects.
+
+        Generated CardRules distinguish ``on_play`` and ``on_fanfare``.  A
+        single play action carries one target decision to both triggers, so a
+        fanfare-only choice must be surfaced even when the card has no
+        ``on_play`` ability (the old implementation returned ``[None]`` and
+        silently skipped cards such as targeted Fanfare removal).
+        """
         rule = self.interpreter.rules.get(card.card_id, {})
         kind = ("enhance" if mode else "normal") if isinstance(mode, bool) else str(mode)
-        return self._rule_target_options(state, rule, kind, "on_play")
+        fallback: List[object] = [None]
+        for trigger in ("on_play", "on_fanfare", "on_summon"):
+            options = self._rule_target_options(state, rule, kind, trigger)
+            if options and options != [None]:
+                return options
+            if options:
+                fallback = options
+        return fallback
 
     def _rule_target_options(self, state: LethalState, rule: dict, kind: str, trigger: str) -> List[object]:
         modes = rule.get("modes", ()) if isinstance(rule, dict) else ()
@@ -651,6 +903,16 @@ class LethalEngine:
             return list(combinations(ids, count)) if count > 1 else ids
 
         target_effect = next((e for e in target_effects if e["target"].get("selection") not in ("all", "each", "random") and (e["target"].get("scope") in ("enemy_follower", "ally_follower", "any", "hand") or isinstance(e["target"].get("filters"), dict) and e["target"].get("filters", {}).get("zone") == "hand")), None)
+        # Leader targets are not entries in either board list.  Returning the
+        # enemy-board follower IDs for a direct leader effect used to make
+        # the UI show bogus choices (and made evolve/fanfare search branch
+        # once per enemy follower even though every branch hit the leader).
+        leader_effect = next((e for e in target_effects if e["target"].get("selection") not in ("all", "each", "random") and e["target"].get("scope") in ("enemy_leader", "ally_leader")), None)
+        if leader_effect is not None:
+            scope = leader_effect["target"].get("scope")
+            if scope == "enemy_leader":
+                return [state.enemy_leader_uid if state.enemy_leader_uid is not None else "enemy_leader"]
+            return ["ally_leader"]
         if target_effect is None:
             return [None]
         count = next((int(e.get("target", {}).get("count")) for e in effects if isinstance(e, dict) and isinstance(e.get("target"), dict) and isinstance(e.get("target", {}).get("count"), int) and e.get("target", {}).get("count") > 1), 1)
@@ -672,4 +934,14 @@ class LethalEngine:
         else:
             board = state.enemy_board
         ids = [f.unique_id for f in board if self.interpreter._matches_follower_filters(f, "ally" if f in state.my_board else "enemy", filters)]
+        # ``any`` with an explicit leader card type may legally target the
+        # opposing leader in addition to the board permanents.  Keep the
+        # marker/UID in the same choice list so selected target effects have a
+        # complete, deterministic UI projection.
+        if scope == "any":
+            requested_types = filters.get("card_type")
+            requested_types = requested_types if isinstance(requested_types, (list, tuple, set)) else ([requested_types] if requested_types else [])
+            side = filters.get("side")
+            if "leader" in requested_types and side not in ("ally", "your"):
+                ids.insert(0, state.enemy_leader_uid if state.enemy_leader_uid is not None else "enemy_leader")
         return list(combinations(ids, count)) if count > 1 else ids

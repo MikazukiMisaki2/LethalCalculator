@@ -27,6 +27,14 @@
     {
       "name": "random_choice_requires_nonempty_choices",
       "effect": {"op": "random_choice", "choices": []}
+    },
+    {
+      "name": "invoke_requires_a_source_or_target",
+      "effect": {"op": "invoke"}
+    },
+    {
+      "name": "remove_keyword_requires_keyword_and_target",
+      "effect": {"op": "remove_keyword", "target": {"scope": "self"}}
     }
   ]
 }

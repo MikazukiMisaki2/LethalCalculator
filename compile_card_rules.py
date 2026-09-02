@@ -273,7 +273,12 @@ def effect(node: dict[str, Any], name_index: dict[str, int] | None = None) -> di
             nested = [item for item in nested if item is not None]
             if nested:
                 choices.append({"label": str(choice.get("label", "")), "effects": nested})
-        return {"op": "mode_choice", "choices": choices} if choices else None
+        if not choices:
+            return None
+        out: dict[str, Any] = {"op": "mode_choice", "choices": choices}
+        if node.get("selection_count") is not None:
+            out["selection_count"] = int(node["selection_count"])
+        return out
     if kind == "activate_all_mode_choices":
         return {"op": "activate_all_mode_choices"}
     if kind == "progressive_sequence":
@@ -319,7 +324,15 @@ def effect(node: dict[str, Any], name_index: dict[str, int] | None = None) -> di
     if kind == "discard":
         return {"op": "discard", "target": node.get("target", {"scope": "any", "selection": "chosen"})}
     if kind == "invoke":
-        return {"op": "invoke", "target": node.get("target", {"scope": "self"})}
+        out = {"op": "invoke", "target": node.get("target", {"scope": "self"})}
+        # Preserve optional zone/selector metadata for hand- and deck-based
+        # invocation.  The legacy “Invoke this card” form intentionally keeps
+        # only its self target and is resolved from the source entity at
+        # runtime.
+        for field in ("card_id", "source_card_id", "from_zone", "resource_selector", "count"):
+            if field in node:
+                out[field] = node[field]
+        return out
     if kind == "gain_crest":
         card_id = _resolve_card_name(name_index, str(node.get("source_card_name", "")).removeprefix("Crest:"))
         if not card_id:
@@ -436,6 +449,8 @@ def effect(node: dict[str, Any], name_index: dict[str, int] | None = None) -> di
         return {"op": "replicate_ability", "trigger": node.get("trigger", "on_fanfare")}
     if kind == "grant_keyword":
         return {"op": "grant_keyword", "keyword": node.get("keyword", ""), "target": node.get("target", {"scope": "self"})}
+    if kind == "remove_keyword":
+        return {"op": "remove_keyword", "keyword": node.get("keyword", node.get("status", "")), "target": node.get("target", {"scope": "self"})}
     if kind == "remove_abilities":
         return {"op": "remove_abilities", "target": node.get("target", {"scope": "any"})}
     if kind == "modify_damage_taken":
@@ -471,6 +486,7 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
     variables: dict[str, Any] = {}
     fusion_configs: list[dict[str, Any]] = []
     countdown_initial: int | None = None
+    default_attacks: int | None = None
     unparsed = []
     unsupported = False
     clauses = list(ast_card.get("abilities", []))
@@ -509,8 +525,12 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
                 config["outcomes"] = resolved_outcomes
             fusion_configs.append(config)
         classification = clause.get("classification", "unparsed")
-        classification_needs_audit = classification != "matched"
-        if classification != "matched":
+        # A missing translation is not itself an executable gap when the
+        # available language produced a complete effect list.  The source is
+        # still retained in the AST for audit, but it must not turn a
+        # bilingual-equivalent rule partial merely because one side is blank.
+        classification_needs_audit = classification not in ("matched", "missing_translation")
+        if classification not in ("matched", "missing_translation"):
             unsupported = True
         mode = clause.get("mode") or "normal"
         special_condition = None
@@ -540,7 +560,26 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
             # Spell text without an explicit trigger resolves when played.
             # Do not apply this fallback to followers/amulets, where a static
             # clause may describe an aura or activation ability.
-            if (catalog_card.get("type") != "spell" and mode == "normal") or not non_keyword_nodes:
+            # A static “Can attack N times per turn” line is an intrinsic
+            # entity property.  Store it on the rule so newly summoned and
+            # copied entities start with the correct attack allowance rather
+            # than treating it as an on-play action.
+            static_attack_nodes = [node for node in non_keyword_nodes if node.get("kind") == "set_attacks" and isinstance(node.get("amount"), (int, float))]
+            if static_attack_nodes and catalog_card.get("type") in ("follower", "amulet"):
+                default_attacks = max(default_attacks or 1, *(int(node["amount"]) for node in static_attack_nodes))
+                non_keyword_nodes = [node for node in non_keyword_nodes if node.get("kind") != "set_attacks"]
+            # A static line can also describe an event keyword rather than an
+            # intrinsic property.  Kou & You's “Strike” heal is the canonical
+            # example: keep the attack allowance above as metadata, but route
+            # the remaining effects to the combat trigger.
+            source_clause = clause.get("source_clause", {})
+            source_texts = source_clause.values() if isinstance(source_clause, dict) else (source_clause,)
+            has_strike = any(re.search(r"\bstrike\s*:|交战时", str(value), re.I) for value in source_texts if value)
+            if has_strike and non_keyword_nodes:
+                clause = dict(clause)
+                clause["trigger"] = "on_follower_attack"
+                clause["effects"] = non_keyword_nodes
+            elif (catalog_card.get("type") != "spell" and mode == "normal") or not non_keyword_nodes:
                 if classification_needs_audit:
                     sources = clause.get("source_clause", {})
                     if isinstance(sources, dict):
@@ -576,8 +615,20 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
             # example, a Last Words body).  Matched bilingual effects must
             # not erase that marker; keep the compiled immediate effects but
             # downgrade the rule to partial at the contract boundary.
-            unsupported = True
-            unparsed.extend(clause.get("unparsed_clauses", []))
+            source_map = clause.get("source_clause") if isinstance(clause.get("source_clause"), dict) else {}
+            primary = ast_card.get("primary_language", "eng")
+            source_text = source_map.get(primary) or source_map.get("eng") or source_map.get("chs")
+            redundant_translation = _is_redundant_translation_source(clause, source_text, source_nodes, effects)
+            if not redundant_translation:
+                unsupported = True
+                unparsed.extend(clause.get("unparsed_clauses", []))
+            elif clause.get("classification") == "missing_translation":
+                # The executable payload is complete, but the bilingual
+                # contract is still incomplete: retain ``partial`` support so
+                # callers can distinguish a Chinese-only rule from a fully
+                # translated one.  The duplicate source sentence itself is
+                # intentionally omitted from ``unparsed_clauses``.
+                unsupported = True
         if len(effects) != len(source_nodes):
             unsupported = True
             unparsed.append(f"unresolved_card_reference:{clause.get('ability_id', card_id)}")
@@ -587,10 +638,12 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
             unparsed.append(f"unresolved_previous_effect:{clause.get('ability_id', card_id)}")
         if not effects and classification == "matched":
             continue
-        if classification != "matched" or any(node.get("kind") not in {"damage", "heal", "repeat", "conditional", "mode_choice", "activate_all_mode_choices", "progressive_sequence", "draw", "buff", "recover_pp", "modify_cost", "set_cost", "set_attacks", "reanimate", "spellboost", "discard", "invoke", "gain_crest", "banish", "modify_crest", "destroy_crest", "transform", "fusion_config", "countdown_config", "return_to_hand", "return_to_deck", "modify_resource", "modify_counter", "consume_resource", "grant_resource_ability", "summon", "add_to_hand", "copy", "destroy", "auto_evolve", "replicate_ability", "grant_keyword", "grant_status", "remove_abilities", "modify_damage_taken", "set_stat", "modify_previous_effect", "replace_deck"} for node in clause.get("effects", []) if isinstance(node, dict) and not (node.get("kind") == "grant_keyword" and node.get("keyword") in clause.get("static_keywords", []))):
+        if classification not in ("matched", "missing_translation") or any(node.get("kind") not in {"damage", "heal", "repeat", "conditional", "mode_choice", "activate_all_mode_choices", "progressive_sequence", "draw", "buff", "recover_pp", "modify_cost", "set_cost", "set_attacks", "reanimate", "spellboost", "discard", "invoke", "gain_crest", "banish", "modify_crest", "destroy_crest", "transform", "fusion_config", "countdown_config", "return_to_hand", "return_to_deck", "modify_resource", "modify_counter", "consume_resource", "grant_resource_ability", "summon", "add_to_hand", "copy", "destroy", "auto_evolve", "replicate_ability", "grant_keyword", "grant_status", "remove_keyword", "remove_abilities", "modify_damage_taken", "set_stat", "modify_previous_effect", "replace_deck"} for node in clause.get("effects", []) if isinstance(node, dict) and not (node.get("kind") == "grant_keyword" and node.get("keyword") in clause.get("static_keywords", []))):
             unsupported = True
         if effects:
             ability = {"trigger": ("on_play" if mode_selection else clause.get("trigger", "on_play")), "effects": effects}
+            if isinstance(clause.get("trigger_filter"), dict):
+                ability["trigger_filter"] = copy.deepcopy(clause["trigger_filter"])
             if clause.get("trigger") == "on_engage" and clause.get("mode_cost") is not None:
                 ability["cost"] = clause["mode_cost"]
             conditions = list(clause.get("conditions", []))
@@ -609,9 +662,36 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
             if marker not in seen:
                 seen.add(marker)
                 deduped.append(ability)
-        abilities_by_mode[mode_name] = deduped
+        # If a paired translation emitted the same trigger twice and one
+        # ability is a strict superset of the other, keep the richer payload
+        # once.  This removes duplicate static/super-evolve nodes while
+        # preserving genuinely repeated actions.
+        compacted: list[dict[str, Any]] = []
+        for ability in deduped:
+            signature = {json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in ability.get("effects", []) if isinstance(item, dict)}
+            replaced = False
+            for index, previous in enumerate(compacted):
+                if previous.get("trigger") != ability.get("trigger") or previous.get("condition") != ability.get("condition"):
+                    continue
+                previous_signature = {json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in previous.get("effects", []) if isinstance(item, dict)}
+                if signature <= previous_signature:
+                    replaced = True
+                    break
+                if previous_signature < signature:
+                    compacted[index] = ability
+                    replaced = True
+                    break
+            if not replaced:
+                compacted.append(ability)
+        abilities_by_mode[mode_name] = compacted
     has_abilities = any(abilities_by_mode.values())
-    support = "partial" if unsupported or unparsed else ("generated" if has_abilities or static_keywords or fusion_configs or countdown_initial is not None else "unsupported")
+    # Token/base entities with no skill text are valid no-op catalog entries;
+    # they are still needed as summon targets and must not be reported as
+    # parser failures.  Only a card that has published text but produced no
+    # executable payload remains unsupported.
+    card_text = catalog_card.get("text") if isinstance(catalog_card, dict) else None
+    has_skill_text = bool(card_text.get("skill_texts")) if isinstance(card_text, dict) else False
+    support = "partial" if unsupported or unparsed else ("generated" if has_abilities or static_keywords or fusion_configs or countdown_initial is not None or not has_skill_text else "unsupported")
     rule = {
         "card_id": int(card_id),
         "support": support,
@@ -622,6 +702,8 @@ def compile_card(card_id: str, ast_card: dict[str, Any], catalog_card: dict[str,
         rule["modes"][0]["abilities"] = [{"trigger": "on_play", "effects": [{"op": "sequence", "effects": []}]}]
     if static_keywords:
         rule["static_keywords"] = sorted(static_keywords)
+    if default_attacks is not None:
+        rule["default_attacks"] = int(default_attacks)
     if variables:
         rule["variables"] = variables
     if countdown_initial is not None:
