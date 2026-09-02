@@ -34,20 +34,62 @@ def _variable_source(text: str) -> str | None:
 
 
 def split_mode_clauses(clause: dict[str, Any]) -> list[dict[str, Any]]:
-    """Split inline Enhance/Accelerate/Crystallize sections.
+    """Split inline cost/mode sections while retaining source provenance.
 
     The normalized source keeps a whole ability sentence in one clause. This
     helper creates deterministic virtual clauses while retaining the original
     source key/index for bilingual pairing and auditability.
     """
     text = clause.get("plain", "")
-    marker = re.compile(r"(?P<label>enhance|accelerate|crystallize)\s*\(\s*(?P<cost>\d+)\s*\)\s*:\s*|(?P<chs>爆能强化|加速|结晶)[_（(]?\s*(?P<chs_cost>\d+)?\s*[）)]?\s*】?\s*[:：]?", re.I)
+    marker = re.compile(
+        r"(?P<special>super[- ]?skybound\s+art|skybound\s+art)\s*[-:：]\s*"
+        r"|(?P<label>enhance|accelerate|crystallize)\s*\(\s*(?P<cost>\d+)\s*\)\s*:\s*"
+        r"|(?P<chs_special>解放奥义|超奥义|奥义)\s*[-:：]\s*"
+        r"|(?P<chs>爆能强化|加速|结晶)[_（(]?\s*(?P<chs_cost>\d+)?\s*[）)]?\s*】?\s*[:：]?",
+        re.I,
+    )
     matches = list(marker.finditer(text))
     if not matches:
         return [clause]
     pieces: list[dict[str, Any]] = []
     first = matches[0]
     prefix = text[:first.start()].strip("【】 ")
+    raw_prefix = prefix
+    # A trigger label before the first special mode is not an independent
+    # ability. Keep it only when it also contains a real base effect.
+    if re.fullmatch(
+        r"(?:fanfare|evolve|super[- ]?evolve|入场曲|进化时|超进化时|"
+        r"select\s+a\s+mode\s+to\s+activate|选择(?:一个)?模式(?:来)?(?:发动|激活))"
+        r"\s*[.。:：]?",
+        prefix,
+        re.I,
+    ):
+        prefix = ""
+    # A common layout puts the mode header before a Super Skybound Art
+    # replacement and the numbered choices after it:
+    # ``Select a Mode ... Super Skybound Art - Activate all ... 1. ...``.
+    # Split that into a normal mode-choice clause plus a short replacement
+    # clause; otherwise every numbered choice is incorrectly attached to the
+    # Super branch and the header becomes an unparsed standalone sentence.
+    first_label = (first.group("special") or first.group("chs_special") or "").lower()
+    first_body = text[first.end():].strip("【】 ")
+    first_option = re.search(r"(?:^|\s)(?:([1-9]\d*)[.)]|（([1-9]\d*)）)\s*", first_body)
+    mode_header = bool(re.search(r"select\s+a\s+mode\s+to\s+activate|选择(?:一个)?模式", raw_prefix, re.I))
+    normal_mode_piece: dict[str, Any] | None = None
+    if first_label in {
+        "skybound art",
+        "skybound-art",
+        "super skybound art",
+        "super-skybound art",
+        "奥义",
+        "解放奥义",
+        "超奥义",
+    } and mode_header and first_option:
+        normal_mode_piece = dict(clause)
+        normal_mode_piece["plain"] = f"{raw_prefix} {first_body[first_option.start():]}".strip()
+        normal_mode_piece["mode_override"] = "mode_selection"
+        pieces.append(normal_mode_piece)
+        prefix = ""
     if prefix:
         item = dict(clause)
         item["plain"] = prefix
@@ -56,33 +98,87 @@ def split_mode_clauses(clause: dict[str, Any]) -> list[dict[str, Any]]:
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         body = text[match.end():end].strip("【】 ")
-        label = (match.group("label") or match.group("chs") or "").lower()
-        mode = {"enhance": "enhance", "accelerate": "accelerate", "crystallize": "crystallize", "爆能强化": "enhance", "加速": "accelerate", "结晶": "crystallize"}.get(label, label)
+        if index == 0 and normal_mode_piece is not None and first_option is not None:
+            # Keep only the replacement preamble on the Super branch; the
+            # numbered choices are represented by ``normal_mode_piece``.
+            body = first_body[:first_option.start()].strip("【】 ")
+        label = (match.group("special") or match.group("chs_special") or match.group("label") or match.group("chs") or "").lower()
+        mode = {
+            "enhance": "enhance", "accelerate": "accelerate", "crystallize": "crystallize",
+            "爆能强化": "enhance", "加速": "accelerate", "结晶": "crystallize",
+            "skybound art": "skybound_art", "super skybound art": "super_skybound_art",
+            "skybound-art": "skybound_art", "super-skybound art": "super_skybound_art",
+            "奥义": "skybound_art", "超奥义": "super_skybound_art", "解放奥义": "super_skybound_art",
+        }.get(label, label)
         item = dict(clause)
         item["plain"] = body
         item["mode_override"] = mode
-        item["mode_cost"] = int(match.group("cost") or match.group("chs_cost") or 0)
+        raw_cost = match.group("cost") or match.group("chs_cost")
+        item["mode_cost"] = int(raw_cost) if raw_cost else None
         pieces.append(item)
     return pieces
 
 
 def _target(text: str) -> dict[str, Any] | None:
     value = text.lower()
+    # Resolve an explicitly addressed leader before looking at the rest of
+    # the sentence.  Trigger clauses often mention both the triggering
+    # follower and a follow-up leader effect (for example: "Whenever an
+    # enemy follower enters ... deal 1 damage to the enemy leader").  The
+    # broad follower-or-leader fallback below must not turn that into a
+    # chosen field target.
+    if re.search(r"deal\s+(?:\d+|x)\s+damage\s+to\s+(?:the\s+)?enemy\s+leader", text, re.I):
+        return {"scope": "enemy_leader"}
+    if re.search(r"restore\s+(?:\d+|x)\s+defense\s+to\s+(?:your|the allied)\s+leader", text, re.I):
+        return {"scope": "ally_leader"}
     random_enemy_count = re.search(r"(?:deal damage to\s+)?(\d+)\s+random enemy followers?", text, re.I)
     if random_enemy_count:
         return {"scope": "enemy_follower", "selection": "random", "count": int(random_enemy_count.group(1))}
+    enemy_count_chs = re.search(
+        r"(?:选择|指定)(?:对手|敌方)(?:的)?(?:战场上|场上)?(?:的)?\s*(\d+|一|1)\s*(?:个|张)?\s*随从",
+        text,
+        re.I,
+    )
+    if enemy_count_chs:
+        token = enemy_count_chs.group(1)
+        return {"scope": "enemy_follower", "selection": "chosen", "count": 1 if token in {"一", "1"} else int(token)}
     enemy_count = re.search(r"select\s+(\d+)\s+enemy followers?", text, re.I)
     if enemy_count:
         return {"scope": "enemy_follower", "selection": "chosen", "count": int(enemy_count.group(1))}
     allied_other_count = re.search(r"select\s+(\d+)\s+other allied followers?", text, re.I)
     if allied_other_count:
         return {"scope": "ally_follower", "selection": "chosen", "count": int(allied_other_count.group(1)), "filters": {"exclude_source": True}}
-    hand_selected = re.search(r"select\s+(?:a|an|\d+)\s+(?:(\w+)\s+)?(?:card|follower|spell|amulet)\s+in your hand", text, re.I)
+    # Explicit allied field selections must win over the broad enemy/follower
+    # fallbacks below.  Keep the selection as a first-class target so a later
+    # copy/buff/status operation can refer to the chosen entity.
+    allied_field_selected = re.search(
+        r"select\s+(?:a|an|\d+)\s+(?:allied|your)\s+(follower|card|amulet|spell)\s+on\s+the\s+field",
+        text,
+        re.I,
+    )
+    if allied_field_selected:
+        card_type = allied_field_selected.group(1).lower()
+        filters: dict[str, Any] = {"zone": "field"}
+        if card_type != "card":
+            filters["card_type"] = card_type
+        return {"scope": "ally_follower" if card_type == "follower" else "any", "selection": "chosen", "count": 1, "filters": filters}
+    hand_selected = re.search(
+        r"select\s+(?:a|an|\d+)\s+(?:(?P<qualifier>[A-Za-z][\w-]*)\s+)?"
+        r"(?P<kind>card|follower|spell|amulet)\s+in your hand",
+        text,
+        re.I,
+    )
     if hand_selected:
-        kind_match = re.search(r"select\s+(?:a|an|\d+)\s+(card|follower|spell|amulet)\s+in your hand", text, re.I)
         filters: dict[str, Any] = {"zone": "hand"}
-        if kind_match and kind_match.group(1).lower() != "card":
-            filters["card_type"] = kind_match.group(1).lower()
+        kind = hand_selected.group("kind").lower()
+        qualifier = (hand_selected.group("qualifier") or "").lower()
+        if kind != "card":
+            filters["card_type"] = kind
+        # Artifact/Puppetry/etc. are represented as tribes in the catalog.
+        # Avoid treating the article or a random-selection adjective as a
+        # tribe when a future template adds one.
+        if qualifier and qualifier not in {"random", "another", "allied", "your", "enemy"}:
+            filters["tribe"] = qualifier
         return {"scope": "any", "selection": "chosen", "count": 1, "filters": filters}
     # Explicit multi-card selection must be resolved before broad scope
     # fallbacks. `other cards` excludes the source permanent itself.
@@ -94,6 +190,8 @@ def _target(text: str) -> dict[str, Any] | None:
     if count_match:
         count = int(next(item for item in count_match.groups() if item))
         return {"scope": "any", "selection": "chosen", "count": count, "filters": {"card_type": "field_card"}}
+    if ("enemy leader" in value and "enemy follower" in value) or ("主战者" in text and "随从" in text and re.search(r"或|or", text, re.I)):
+        return {"scope": "any", "selection": "chosen", "count": 1, "filters": {"side": "enemy", "card_type": ["follower", "leader"], "zone": "field"}}
     if "enemy leader" in value or re.search(r"(?:对手的|敌方的)主战者", text):
         return {"scope": "enemy_leader"}
     if "your leader" in value or re.search(r"(?:自己的|你的)主战者", text):
@@ -106,6 +204,8 @@ def _target(text: str) -> dict[str, Any] | None:
         return {"scope": "any", "selection": "random", "count": 1, "filters": {"card_type": "follower"}}
     if "random enemy follower" in value or ("随机" in text and "随从" in text):
         return {"scope": "enemy_follower", "selection": "random", "count": 1}
+    if "random enemy" in value:
+        return {"scope": "any", "selection": "random", "count": 1, "filters": {"side": "enemy", "card_type": ["follower", "leader"], "zone": "field"}}
     if "split between all enemy followers" in value or "所有随从分配" in text:
         return {"scope": "enemy_follower", "selection": "all", "allocation": "ordered_split"}
     if "all enemy follower" in value or ("所有随从" in text and ("对手" in text or "敌方" in text)):
@@ -116,6 +216,16 @@ def _target(text: str) -> dict[str, Any] | None:
         if allied_tribe.group(1):
             filters["exclude_source"] = True
         return {"scope": "ally_follower", "selection": "all", "filters": filters}
+    # A plain ``all allied followers`` recipient is common in Mode options
+    # such as “give all allied followers +1/+0 and Rush”.  Keep it as the
+    # shared target for both the stat change and the trailing keyword; if it
+    # falls through to ``self`` the keyword silently applies to the spell
+    # source instead of the intended board.
+    if re.search(r"all (?:other )?allied followers?", value):
+        target = {"scope": "ally_follower", "selection": "all"}
+        if "other allied follower" in value:
+            target["filters"] = {"exclude_source": True}
+        return target
     if "all followers" in value or "all other followers" in value or "战场上的所有随从" in text:
         target = {"scope": "any", "selection": "all"}
         if "other follower" in value or "其他所有随从" in text:
@@ -132,6 +242,9 @@ def _target(text: str) -> dict[str, Any] | None:
         max_life = re.search(r"with\s+(\d+)\s+defense or less", text, re.I)
         if max_life:
             result["filters"] = {"max_life": int(max_life.group(1))}
+        max_attack = re.search(r"with\s+(\d+)\s+attack or less", text, re.I)
+        if max_attack:
+            result.setdefault("filters", {})["max_attack"] = int(max_attack.group(1))
         return result
     if "enemy card" in value:
         return {"scope": "any", "selection": "chosen", "count": 1, "filters": {"side": "enemy", "zone": "field", "card_type": "field_card"}}
@@ -150,12 +263,39 @@ def _damage_effects(text: str) -> list[dict[str, Any]]:
     """Extract each sentence-level damage operation independently."""
     effects: list[dict[str, Any]] = []
     whole_source = _variable_source(text)
-    fragments = [part.strip(' \"“”') for part in re.split(r"(?<=[。.!?])\s*", text) if part.strip()]
+    # Damage inside a quoted Last Words/谢幕曲 body is a deferred ability, not
+    # an immediate damage operation.  Parse that status separately in
+    # ``clause_to_ast`` and keep it out of this immediate-effect pass.  Other
+    # quoted effect text (for example a repeated damage instruction) remains
+    # eligible for parsing.
+    analysis_text = re.sub(r'(?i)["“]\s*(?:last\s+words|谢幕曲)\s*[:：][^"”\n]*["”]', "", text)
+    # Card text commonly chains effects with commas rather than full stops:
+    # ``give it ... until ..., deal 1 damage ..., and restore ...``.  Split
+    # only when the comma starts another effect verb so card names and quoted
+    # text remain intact.  This lets each damage clause get its own target.
+    fragments = [
+        part.strip(' \"“”')
+        for part in re.split(
+            r"(?<=[。.!?])\s*|,\s*(?=(?:and\s+)?(?:deal|restore|destroy|summon|give|draw|add|return|banish|evolve|do)\b)",
+            analysis_text,
+            flags=re.I,
+        )
+        if part.strip()
+    ]
+    previous_target: dict[str, Any] | None = None
     for fragment in fragments:
         amount = _amount(fragment)
         if amount == "variable":
             amount = _variable_source(fragment) or whole_source or "var:X"
         target = _target(fragment)
+        # Chained English clauses routinely use a pronoun (``select X ...,
+        # and deal it/them N damage``).  The comma splitter isolates the
+        # second clause, so carry the immediately preceding explicit target
+        # forward when the damage fragment has no standalone target phrase.
+        if target is None and previous_target is not None and amount is not None:
+            target = previous_target
+        if target is not None:
+            previous_target = target
         if amount is None or target is None:
             continue
         item: dict[str, Any] = {"kind": "damage", "target": target, "amount": amount}
@@ -164,6 +304,129 @@ def _damage_effects(text: str) -> list[dict[str, Any]]:
             item = {"kind": "repeat", "count": count, "effects": [item]}
         effects.append(item)
     return effects
+
+
+# Resource keywords such as ``Necromancy (6) -`` and ``Earth Rite (1) -``
+# introduce a conditional suffix, rather than gating the complete sentence.
+# For example, ``Deal 6 damage. Necromancy (6) - Deal 2 damage`` means that
+# the first six damage is unconditional and only the second clause consumes
+# six Shadows.  Keep this grammar close to the AST boundary so every caller
+# (including hand-authored fixtures) gets the same semantics.
+_RESOURCE_GATE_RE = re.compile(
+    r"(?:\b(?P<eng_resource>necromancy|earth\s+rite)\s*\(\s*(?P<eng_amount>\d+)\s*\)"
+    r"|(?P<chs_resource>唤灵|土之秘术)\s*(?:[_＿]\s*|[（(]\s*)(?P<chs_amount>\d+)\s*(?:[）)]\s*)?)"
+    r"\s*(?:[-–—:：]\s*)",
+    re.I,
+)
+
+
+def _resource_gate_split(text: str) -> tuple[str, str, str, int] | None:
+    """Return ``(prefix, suffix, resource, amount)`` for a resource suffix.
+
+    Markers inside a quoted Last Words body belong to the deferred ability,
+    not to the surrounding clause.  Those spans are skipped here and parsed
+    recursively when the nested body is visited.
+    """
+    quoted_status_spans = [
+        match.span()
+        for match in re.finditer(
+            r'["“「『]\s*(?:last\s+words|谢幕曲)\s*[:：][^"”」』]*["”」』]',
+            text,
+            re.I,
+        )
+    ]
+    for match in _RESOURCE_GATE_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in quoted_status_spans):
+            continue
+        resource = match.group("eng_resource") or match.group("chs_resource") or ""
+        resource = "earth_sigil" if "earth" in resource.casefold() or "土之秘术" in resource else "cemetery"
+        amount_raw = match.group("eng_amount") or match.group("chs_amount")
+        if not amount_raw:
+            continue
+        prefix = text[:match.start()].strip(" \t\r\n.;；。")
+        if re.fullmatch(
+            r"(?:fanfare|evolve|super[- ]?evolve|engage|on\s+play|on\s+evolve|"
+            r"on\s+super[- ]?evolve|on\s+engage|入场曲|进化时|超进化时|激奏|激活|启动)"
+            r"\s*[:：]?",
+            prefix,
+            re.I,
+        ):
+            prefix = ""
+        suffix = text[match.end():].strip()
+        if suffix:
+            return prefix, suffix, resource, int(amount_raw)
+    return None
+
+
+def _resource_gated_clause_to_ast(clause: dict[str, Any], split: tuple[str, str, str, int], depth: int) -> dict[str, Any]:
+    """Build an AST with an effect-level resource conditional.
+
+    Parsing the two sides independently avoids trying to infer which already
+    extracted effect belongs to the resource branch.  A depth guard keeps
+    malformed text from recursing forever while still supporting multiple
+    resource markers in one clause.
+    """
+    prefix, suffix, resource, amount = split
+    nested_clause = dict(clause)
+    nested_clause["_resource_split_depth"] = depth + 1
+
+    if prefix:
+        base_clause = dict(nested_clause)
+        base_clause["plain"] = prefix
+        base_clause["structure"] = {}
+        base_node = clause_to_ast(base_clause)
+    else:
+        base_node = None
+
+    branch_clause = dict(nested_clause)
+    branch_clause["plain"] = suffix
+    branch_clause["structure"] = {}
+    branch_node = clause_to_ast(branch_clause)
+
+    # If the suffix is not understood, retain the original clause so the
+    # normal parser/reporting path can expose it as unparsed instead of
+    # manufacturing an empty conditional.
+    if not branch_node.get("effects"):
+        fallback = dict(branch_node)
+        fallback["source_text"] = clause.get("plain", "")
+        fallback["source_clause"] = clause.get("plain", "")
+        return fallback
+
+    node = dict(base_node or branch_node)
+    base_effects = list(base_node.get("effects", ())) if base_node else []
+    branch_effects = list(branch_node.get("effects", ()))
+    branch_effects.insert(0, {"kind": "consume_resource", "resource": resource, "amount": amount})
+    node["effects"] = base_effects + [{
+        "kind": "conditional",
+        "condition": {"state": resource, "cmp": "gte", "value": amount},
+        "effects": branch_effects,
+    }]
+    # A keyword in the gated suffix (e.g. Necromancy - give this follower
+    # Storm) is not a static keyword on the card.  Only the unconditional
+    # prefix contributes static metadata.
+    node["static_keywords"] = sorted(set(base_node.get("static_keywords", ())) if base_node else set())
+    node["conditions"] = list(base_node.get("conditions", ())) if base_node else []
+    node["variable_initializers"] = dict(base_node.get("variable_initializers", {})) if base_node else {}
+    if base_node and base_node.get("countdown_initial") is not None:
+        node["countdown_initial"] = base_node.get("countdown_initial")
+    else:
+        node.pop("countdown_initial", None)
+    node["unparsed"] = list(base_node.get("unparsed", ())) if base_node else []
+    node["unparsed"].extend(branch_node.get("unparsed", ()))
+    node["unparsed_clauses"] = list(base_node.get("unparsed_clauses", ())) if base_node else []
+    node["unparsed_clauses"].extend(branch_node.get("unparsed_clauses", ()))
+    node["language"] = clause.get("language", "")
+    node["source_language"] = clause.get("language", "")
+    node["source_key"] = clause.get("source_key", "")
+    node["index"] = clause.get("index", 0)
+    node["section"] = clause.get("section", "normal")
+    node["trigger"] = clause.get("trigger", "static")
+    node["mode"] = clause.get("mode_override", _mode(clause.get("plain", "")))
+    node["mode_cost"] = clause.get("mode_cost")
+    node["source_text"] = clause.get("plain", "")
+    node["source_clause"] = clause.get("plain", "")
+    node["confidence"] = 1.0 if node["effects"] and not node["unparsed"] and not node["unparsed_clauses"] else 0.0
+    return node
 
 
 def _is_destroy_action(text: str) -> bool:
@@ -175,6 +438,342 @@ def _is_destroy_action(text: str) -> bool:
         r"(?:破坏本卡牌|将(?:其|它|这些卡牌|该卡牌|所选择的卡牌)破坏|选择[^。]*，?破坏)",
     )
     return any(re.search(pattern, value, re.I) for pattern in patterns)
+
+
+_SUMMON_TRAILER_RE = re.compile(
+    r"(?P<trailer>(?:\s+and\s+|\s*,\s*)(?:"
+    r"give\s+(?:it|them|this\s+follower|the\s+exact\s+copy|the\s+exact\s+copies|the\s+copies)\b"
+    r"|evolve\s+(?:it|them|this\s+follower)\b"
+    r"|super-?evolve\s+(?:it|them|this\s+follower)\b"
+    r"|remove\s+last\s+words\s+from\s+it\b"
+    r"|return\s+this\s+card\s+to\s+hand\b"
+    r"|add\s+[^.]*?\bto\s+(?:your\s+)?hand\b"
+    r"|set\s+its\s+cost\b"
+    r"|destroy\s+this\s+card\b"
+    r"))",
+    re.I,
+)
+
+
+def _split_card_names(name_str: str) -> tuple[list[str], str]:
+    """Split 'A, B, and C' / 'A and B' into separate card names and separate a
+    trailing 'and give it X' / 'and evolve it' style effect suffix so that the
+    leading token is a real catalog card name."""
+    raw = (name_str or "").strip()
+    trailer = ""
+    m = _SUMMON_TRAILER_RE.search(raw)
+    if m and m.start() > 0:
+        trailer = raw[m.start():]
+        raw = raw[:m.start()]
+    # A comma is part of many official English card names (for example
+    # ``Lhynkal, Wandering Fool``). Only treat comma punctuation as a card
+    # separator when the text explicitly has a list conjunction; otherwise
+    # preserve the whole string for catalog-aware resolution in the compiler.
+    # ``&`` is part of a number of official card names (notably
+    # ``Zeta & Bea, Crimson and Blue``).  Treating it as a list delimiter
+    # makes the resolver invent unrelated cards such as ``Bluerust``.  Only
+    # split conjunctions when the source does not contain an ampersand.
+    has_name_ampersand = re.search(r"\s&\s", raw) is not None
+    if not has_name_ampersand and re.search(r",\s*(?:and\s+|&\s+)", raw, re.I):
+        parts = [p.strip(" .,;") for p in re.split(r"\s+(?:and|&)\s+|,\s*(?:and\s+)?", raw) if p.strip(" .,;")]
+    elif not has_name_ampersand and re.search(r"\s+(?:and|&)\s+", raw, re.I):
+        parts = [p.strip(" .,;") for p in re.split(r"\s+(?:and|&)\s+", raw) if p.strip(" .,;")]
+    else:
+        parts = [raw.strip(" .,;")] if raw.strip(" .,;") else []
+    return parts, trailer.strip()
+
+
+_CLASS_ALIASES = {
+    "forestcraft": "forestcraft",
+    "swordcraft": "swordcraft",
+    "runcraft": "runcraft",
+    "dragoncraft": "dragoncraft",
+    "shadowcraft": "shadowcraft",
+    "bloodcraft": "bloodcraft",
+    "havencraft": "havencraft",
+    "portalcraft": "portalcraft",
+    "neutral": "neutral",
+}
+
+
+def _source_selector(
+    *,
+    zone: str,
+    side: str | None = None,
+    selection: str = "random",
+    count: int | str | None = None,
+    filters: dict[str, Any] | None = None,
+    distinct_by: str | None = None,
+) -> dict[str, Any]:
+    """Build the language-neutral selector used by dynamic effects.
+
+    A selector is deliberately data-only: the catalog/runtime, rather than the
+    text parser, resolves which concrete entity/card satisfies it at execution
+    time.  ``distinct_by`` captures phrases such as "differently named".
+    """
+    result: dict[str, Any] = {"zone": zone, "selection": selection}
+    if side:
+        result["side"] = side
+    if count is not None:
+        result["count"] = count
+    if filters:
+        result["filters"] = filters
+    if distinct_by:
+        result["distinct_by"] = distinct_by
+    return result
+
+
+def _selector_for_random_deck_summon(text: str) -> dict[str, Any] | None:
+    """Parse ``Summon N random <class> <type> ... from your deck``.
+
+    This is intentionally narrower than the generic summon parser.  It only
+    fires when the source is explicitly the deck, preventing a card name that
+    happens to contain "random" from being interpreted as a selector.
+    """
+    match = re.search(
+        r"\bsummon\s+(?:(?P<count>\d+)|an?)\s+"
+        r"(?P<random>random)\s+(?P<distinct>differently\s+named\s+)?"
+        r"(?:(?P<side>allied|enemy|your|opponent)\s+)?"
+        r"(?:(?P<class>[A-Za-z][\w-]*)\s+)?"
+        r"(?P<type>followers?|amulets?|spells?|cards?)"
+        r"(?:\s+that\s+costs?\s+(?P<max_cost>\d+)\s+or\s+less)?\s+from\s+your\s+deck",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count = int(match.group("count") or 1)
+    card_type = match.group("type").lower().rstrip("s")
+    filters: dict[str, Any] = {"card_type": card_type}
+    side_name = match.group("side")
+    if side_name and side_name.casefold() in {"enemy", "opponent"}:
+        filters["side"] = "enemy"
+    class_name = match.group("class")
+    if class_name and class_name.casefold() not in {"allied", "enemy", "your", "opponent"}:
+        class_key = class_name.casefold()
+        if class_key in _CLASS_ALIASES:
+            filters["class"] = _CLASS_ALIASES[class_key]
+        else:
+            # Newer descriptors such as Abysscraft are tribes in the catalog,
+            # not playable classes.  Keep them as a tribe filter instead of
+            # inventing an unknown class namespace.
+            filters["tribe"] = class_key
+    if match.group("max_cost"):
+        filters["max_cost"] = int(match.group("max_cost"))
+    return _source_selector(
+        zone="deck",
+        side="enemy" if side_name and side_name.casefold() in {"enemy", "opponent"} else "ally",
+        selection="random",
+        count=count,
+        filters=filters,
+        distinct_by="card_id" if match.group("distinct") else None,
+    )
+
+
+def _selector_for_destroyed_amulet_copy(text: str) -> tuple[int, dict[str, Any]] | None:
+    """Parse the historical Last Words amulet-copy summon template."""
+    match = re.search(
+        r"\bsummon\s+(?:an?\s+)?copy\s+each\s+of\s+(?P<count>\d+)\s+"
+        r"random\s+differently\s+named\s+allied\s+amulets?\s+destroyed\s+this\s+match\s+"
+        r"with\s+last\s+words\s+and\s+a\s+base\s+cost\s+of\s+(?P<max_cost>\d+)\s+or\s+less",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    filters = {
+        "side": "ally",
+        "card_type": "amulet",
+        "has_last_words": True,
+        "max_base_cost": int(match.group("max_cost")),
+    }
+    selector = _source_selector(
+        zone="destroyed_this_match",
+        selection="random",
+        count=int(match.group("count")),
+        filters=filters,
+        distinct_by="card_id",
+    )
+    return int(match.group("count")), selector
+
+
+def _selector_for_historical_copy(text: str) -> tuple[int, dict[str, Any]] | None:
+    """Parse a copy of cards destroyed earlier in this match.
+
+    The selector is kept separate from the board target because historical
+    cards may no longer have a live entity.  ``highest_base_cost`` is a
+    deterministic selection hint; ordinary ``random`` copies retain the
+    engine's probability semantics.
+    """
+    match = re.search(
+        r"\bsummon\s+(?:an?\s+)?copy(?:\s+each)?\s+of\s+(?P<count>\d+\s+)?"
+        r"(?:an?\s+)?random\s+(?:differently\s+named\s+)?allied\s+(?P<type>amulets?|followers?|cards?)\s+"
+        r"destroyed\s+this\s+match(?P<tail>[^.;]*)",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count = int((match.group("count") or "1").strip() or 1)
+    card_type = match.group("type").lower().rstrip("s")
+    tail = match.group("tail") or ""
+    filters: dict[str, Any] = {"side": "ally", "card_type": card_type}
+    max_cost = re.search(r"base\s+cost\s+of\s+(\d+)\s+or\s+less", tail, re.I)
+    if max_cost:
+        filters["max_base_cost"] = int(max_cost.group(1))
+    if re.search(r"last\s+words", tail, re.I):
+        filters["has_last_words"] = True
+    selection = "highest_base_cost" if re.search(r"highest\s+base\s+cost", tail, re.I) else "random"
+    selector = _source_selector(
+        zone="destroyed_this_match",
+        selection=selection,
+        count=count,
+        filters=filters,
+        distinct_by="card_id" if re.search(r"differently\s+named", match.group(0), re.I) else None,
+    )
+    return count, selector
+
+
+def _selector_for_historical_hand_copy(
+    text: str,
+) -> tuple[int, dict[str, Any], str, bool] | None:
+    """Parse copies of cards destroyed earlier in this match added to a zone.
+
+    The summon form is handled separately because it creates an entity on the
+    field.  This form keeps the source as a historical selector and records the
+    destination/copy mode explicitly, e.g. ``Add a copy of a random allied
+    Artifact follower destroyed this match to your hand``.
+    """
+    match = re.search(
+        r"\badd\s+(?:(?:an?|the)\s+)?(?P<exact>exact\s+)?copy(?:\s+each)?\s+of\s+"
+        r"(?:(?P<count>\d+)\s+)?(?:an?\s+)?random\s+"
+        r"(?P<distinct>differently\s+named\s+)?"
+        r"(?:(?P<side>allied|enemy|opponent)\s+)?"
+        r"(?:(?P<qualifier>[A-Za-z][\w-]*)\s+)?"
+        r"(?P<type>followers?|amulets?|spells?|cards?)\s+destroyed\s+this\s+match"
+        r"(?P<tail>[^.;]*?)\s+to\s+(?:your\s+)?(?P<destination>hand|deck)",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count = int(match.group("count") or 1)
+    card_type = match.group("type").lower().rstrip("s")
+    side_name = (match.group("side") or "allied").casefold()
+    filters: dict[str, Any] = {
+        "side": "enemy" if side_name in {"enemy", "opponent"} else "ally",
+        "card_type": card_type,
+    }
+    qualifier = (match.group("qualifier") or "").casefold()
+    if qualifier:
+        filters["tribe"] = qualifier
+    tail = match.group("tail") or ""
+    max_cost = re.search(r"base\s+cost\s+of\s+(\d+)\s+or\s+less", tail, re.I)
+    if max_cost:
+        filters["max_base_cost"] = int(max_cost.group(1))
+    if re.search(r"last\s+words", tail, re.I):
+        filters["has_last_words"] = True
+    selection = "highest_base_cost" if re.search(r"highest\s+base\s+cost", tail, re.I) else "random"
+    selector = _source_selector(
+        zone="destroyed_this_match",
+        side=filters.pop("side"),
+        selection=selection,
+        filters=filters,
+        distinct_by="card_id" if match.group("distinct") else None,
+    )
+    return count, selector, match.group("destination").lower(), bool(match.group("exact"))
+
+
+def _selector_for_random_deck_copy(
+    text: str,
+) -> tuple[int, dict[str, Any], str, bool] | None:
+    """Parse an exact/card copy selected randomly from a player's deck."""
+    match = re.search(
+        r"\badd\s+(?:(?:an?|the)\s+)?(?P<exact>exact\s+)?copy(?:\s+each)?\s+of\s+"
+        r"(?:(?P<count>\d+)\s+)?(?:an?\s+)?random\s+"
+        r"(?P<distinct>differently\s+named\s+)?"
+        r"(?:(?P<qualifier>[A-Za-z][\w-]*)\s+)?"
+        r"(?P<type>followers?|amulets?|spells?|cards?)\s+in\s+"
+        r"(?P<owner>your\s+opponent's|the\s+opponent's|your)\s+deck"
+        r"\s+to\s+(?:your\s+)?(?P<destination>hand|deck)",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count = int(match.group("count") or 1)
+    card_type = match.group("type").lower().rstrip("s")
+    owner = match.group("owner").casefold()
+    filters: dict[str, Any] = {"card_type": card_type}
+    qualifier = (match.group("qualifier") or "").casefold()
+    if qualifier:
+        if qualifier in _CLASS_ALIASES:
+            filters["class"] = _CLASS_ALIASES[qualifier]
+        else:
+            filters["tribe"] = qualifier
+    selector = _source_selector(
+        zone="deck",
+        side="enemy" if "opponent" in owner else "ally",
+        selection="random",
+        filters=filters,
+        distinct_by="card_id" if match.group("distinct") else None,
+    )
+    return count, selector, match.group("destination").lower(), bool(match.group("exact"))
+
+
+def _selector_for_leftmost_hand_copy(text: str) -> tuple[int, dict[str, Any]] | None:
+    """Parse ``add an exact copy each of the N leftmost cards in your hand``."""
+    match = re.search(
+        r"\badd\s+(?:an?\s+)?exact\s+copy(?:\s+each)?\s+of\s+the\s+"
+        r"(?P<count>\d+)\s+leftmost\s+cards?\s+in\s+your\s+hand\s+to\s+your\s+hand",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count = int(match.group("count"))
+    selector = _source_selector(
+        zone="hand",
+        side="ally",
+        selection="leftmost",
+        count=count,
+        filters={"card_type": "card"},
+    )
+    return count, selector
+
+
+def _selected_hand_selector(text: str) -> tuple[int, dict[str, Any]] | None:
+    """Parse ``Select N <tribe> followers in your hand ...`` selectors."""
+    match = re.search(
+        r"select\s+(?P<count>\d+|an?|a)\s+(?:(?P<qualifier>[A-Za-z][\w-]*)\s+)?"
+        r"(?P<type>followers?|amulets?|spells?|cards?)\s+in\s+your\s+hand"
+        r"(?:\s+that\s+costs?\s+(?P<max_cost>\d+)\s+or\s+less)?",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    count_token = match.group("count")
+    count = int(count_token) if count_token.isdigit() else 1
+    card_type = match.group("type").lower().rstrip("s")
+    filters: dict[str, Any] = {"side": "ally", "card_type": card_type}
+    qualifier = (match.group("qualifier") or "").casefold()
+    if qualifier and qualifier not in {"allied", "your", "enemy", "random"}:
+        filters["tribe"] = qualifier
+    if match.group("max_cost"):
+        filters["max_cost"] = int(match.group("max_cost"))
+    return count, _source_selector(zone="hand", selection="chosen", count=count, filters=filters)
+
+
+def _copy_source_scope(raw: str) -> dict[str, Any]:
+    value = raw.casefold().strip()
+    if value in {"this card", "this follower", "this amulet", "本卡牌", "本随从", "本护符"}:
+        return {"scope": "self"}
+    if value in {"itself", "themselves"}:
+        return {"scope": "self"}
+    if value in {"it", "them", "the selected card", "the selected follower", "the selected amulet", "其", "它"}:
+        return {"scope": "previous_target"}
+    return {"scope": "self", "card_name": raw.strip()}
 
 
 def _effect_map(effects: list[dict[str, Any]]) -> dict[str, set[str]]:
@@ -234,7 +833,11 @@ def _has_real_effect_conflict(chs: dict[str, Any], eng: dict[str, Any]) -> bool:
 
 
 def _repeat(text: str) -> int | str | None:
-    m = re.search(r"do this\s+(\d+|x)\s+times|发动\s*(\d+|x)\s*次", text, re.I)
+    # Card text uses both ``Do this 1 time`` and ``Do it 2 times``.  Treat
+    # the singular form as a real repeat as well; otherwise the base action
+    # is emitted as a plain effect and a later ``instead`` relation cannot
+    # safely change its repeat count.
+    m = re.search(r"do\s+(?:this|it)\s+(\d+|x)\s+times?|发动\s*(\d+|x)\s*次", text, re.I)
     if not m:
         return None
     value = next(x for x in m.groups() if x is not None)
@@ -243,17 +846,25 @@ def _repeat(text: str) -> int | str | None:
 
 def _mode(text: str) -> str | None:
     value = text.lower()
-    if "select a mode" in value or ("模式" in text and re.search(r"选择|发动", text)):
+    if "select a mode" in value or re.search(
+        r"(?:^|[【\s])模式[】\s]*(?:选择|发动)|(?:选择|发动)\s*(?:\d+|一个|1个)?\s*(?:模式|能力)",
+        text,
+        re.I,
+    ):
         return "mode_selection"
     if "super skybound art" in value or "解放奥义" in text:
         return "super_skybound_art"
     if "skybound art" in value or "奥义" in text:
         return "skybound_art"
-    if "enhance" in value or "爆能强化" in text:
+    # Match the keyword as a standalone mode marker.  A substring check
+    # incorrectly classified cards such as ``Enhanced Puppet`` as an
+    # Enhance mode, which then broke bilingual pairing and produced a bogus
+    # Chinese ``unparsed_clauses`` entry even though the Fanfare was parsed.
+    if re.search(r"\benhance(?:ment)?\b", value) or "爆能强化" in text:
         return "enhance"
-    if "accelerate" in value or "加速" in text:
+    if re.search(r"\baccelerate\b", value) or "加速" in text:
         return "accelerate"
-    if "crystallize" in value or "结晶" in text:
+    if re.search(r"\bcrystallize\b", value) or "结晶" in text:
         return "crystallize"
     return None
 
@@ -275,6 +886,44 @@ def _conditions(text: str) -> list[dict[str, Any]]:
         result.append({"state": "evolved", "cmp": "eq", "value": False})
     if re.search(r"this follower is evolved|本随从已进化", text, re.I):
         result.append({"state": "evolved", "cmp": "eq", "value": True})
+    if re.search(r"this follower is super-?evolved|本随从已超进化", text, re.I):
+        result.append({"state": "super_evolved", "cmp": "eq", "value": True})
+    card_cost = re.search(
+        r"this\s+card's\s+cost\s+(isn't|is\s+not|is\s+different\s+from)\s*(\d+)"
+        r"|(?:this\s+card's|its|the\s+card's)\s+cost\s+(?:is|equals?)\s*(\d+)"
+        r"|本卡牌的费用(?:不是|不为|为|是)\s*(\d+)",
+        text,
+        re.I,
+    )
+    if card_cost:
+        # The first alternative is the legacy ``isn't`` predicate.  The
+        # following alternatives model exact cost checks used by discard
+        # chains such as ``If its cost is 7 ... If its cost is 5 ...``.
+        if card_cost.group(1):
+            result.append({"state": "card_cost", "cmp": "ne", "value": int(card_cost.group(2))})
+        elif card_cost.group(3):
+            result.append({"state": "card_cost", "cmp": "eq", "value": int(card_cost.group(3))})
+        else:
+            raw = card_cost.group(0)
+            cmp_name = "ne" if re.search(r"不是|不为", raw) else "eq"
+            result.append({"state": "card_cost", "cmp": cmp_name, "value": int(card_cost.group(4))})
+    allied_amulets = re.search(r"(?:at least|至少)\s*(\d+)\s+allied amulets?|有\s*(\d+)\s*张?护符", text, re.I)
+    if allied_amulets:
+        result.append({"state": "ally_amulet_count", "cmp": "gte", "value": int(next(item for item in allied_amulets.groups() if item))})
+    artifact_count = re.search(r"(?:at least|至少)\s*(\d+)\s+differently named allied artifact followers? have entered the field this match", text, re.I)
+    if artifact_count:
+        result.append({"state": "ally_artifact_count", "cmp": "gte", "value": int(artifact_count.group(1))})
+    if re.search(r"allied follower(?:s)? attacked a leader on your last turn|自己的随从在上个回合攻击过主战者", text, re.I):
+        result.append({"state": "attacked_with_follower_last_turn", "cmp": "eq", "value": True})
+    selected_type = re.search(r"you selected (?:a|an)\s+(spell|follower|amulet|card)|选择(?:了)?(?:一张|1张)?\s*(法术|随从|护符|卡牌)", text, re.I)
+    if selected_type:
+        raw_type = next(item for item in selected_type.groups() if item)
+        type_map = {"法术": "spell", "随从": "follower", "护符": "amulet", "卡牌": "card"}
+        result.append({"state": "selected_card_type", "cmp": "eq", "value": type_map.get(raw_type, raw_type.lower())})
+    present = re.search(r"there(?:'s| is) an? allied\s+(.+?)\s+on the field|场上有(?:一个|1个)?\s*(.+?)的己方卡牌", text, re.I)
+    if present:
+        card_name = next(item for item in present.groups() if item)
+        result.append({"state": "card_present", "cmp": "eq", "value": card_name.strip(" .")})
     evolved_match = re.search(r"allied followers have evolved at least\s*(\d+)\s*times this match|随从的进化次数为\s*(\d+)次或以上", text, re.I)
     if evolved_match:
         result.append({"state": "evolved_allies_this_match", "cmp": "gte", "value": int(next(item for item in evolved_match.groups() if item))})
@@ -287,8 +936,45 @@ def _conditions(text: str) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_last_words_effects(effects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Make entity references in a nested Last Words AST owner-relative.
+
+    A nested body is parsed as a standalone clause, where ``this card`` would
+    naturally resolve to ``self``.  Once the body is attached to a status, the
+    status owner is the deferred trigger source.  Rewriting only copy sources
+    keeps ordinary targets (for example ``enemy leader``) unchanged while
+    preserving exact-copy state semantics.
+    """
+    normalized: list[dict[str, Any]] = []
+    for raw in effects:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if item.get("kind") == "copy" and isinstance(item.get("source"), dict):
+            source = dict(item["source"])
+            if source.get("scope") in {"self", "previous_target", "trigger_source"}:
+                source["scope"] = "trigger_source"
+            item["source"] = source
+        for nested_field in ("effects", "else_effects"):
+            children = item.get(nested_field)
+            if isinstance(children, list):
+                item[nested_field] = _normalize_last_words_effects(children)
+        if isinstance(item.get("ability"), dict):
+            ability = dict(item["ability"])
+            if isinstance(ability.get("effects"), list):
+                ability["effects"] = _normalize_last_words_effects(ability["effects"])
+            item["ability"] = ability
+        normalized.append(item)
+    return normalized
+
+
 def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     text = clause.get("plain", "")
+    resource_split_depth = int(clause.get("_resource_split_depth", 0) or 0)
+    if resource_split_depth < 8:
+        resource_split = _resource_gate_split(text)
+        if resource_split is not None:
+            return _resource_gated_clause_to_ast(clause, resource_split, resource_split_depth)
     structure = clause.get("structure", {})
     node: dict[str, Any] = {
         "language": clause.get("language", ""),
@@ -314,13 +1000,137 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     countdown_header = re.search(r"countdown\s*\((\d+)\)|吟唱[_ ]?(\d+)", text, re.I)
     if countdown_header:
         node["countdown_initial"] = int(next(item for item in countdown_header.groups() if item))
+    evolved_restore_match = re.search(
+        r"at\s+the\s+end\s+of\s+your\s+turn\s*,?\s*draw\s+a\s+card\s+and\s*,?\s*"
+        r"if\s+there(?:'s|\s+is)\s+an?\s+evolved\s+allied\s+follower\s+on\s+the\s+field\s*,?\s*"
+        r"restore\s+1\s+defense\s+to\s+your\s+leader\s*\.\s*"
+        r"if\s+there(?:'s|\s+is)\s+an?\s+super-?evolved\s+allied\s+follower\s+on\s+the\s+field\s*,?\s*"
+        r"restore\s+2\s+defense\s+instead\.?",
+        text,
+        re.I,
+    )
     target = _target(text)
+    # A small family of discard cards has a mutually exclusive cost chain:
+    # when the discarded card is cost 7 it creates a cost-5 copy, otherwise
+    # when it is cost 5 it creates a cost-3 copy.  Parse the chain as a nested
+    # conditional so changing the first copy's cost cannot accidentally make
+    # the second branch fire in the same event.
+    discard_cost_chain = re.fullmatch(
+        r"when\s+this\s+card\s+is\s+discarded\s*,\s*"
+        r"if\s+(?:its|this\s+card's)\s+cost\s+is\s+(?P<first_cost>\d+)\s*,\s*"
+        r"add\s+(?:an?\s+)?(?P<first_name>.+?)\s+to\s+your\s+hand\s+"
+        r"and\s+set\s+its\s+cost\s+to\s+(?P<first_new_cost>\d+)\s*\.\s*"
+        r"if\s+(?:its|this\s+card's)\s+cost\s+is\s+(?P<second_cost>\d+)\s*,\s*"
+        r"add\s+(?:an?\s+)?(?P<second_name>.+?)\s+to\s+your\s+hand\s+"
+        r"and\s+set\s+its\s+cost\s+to\s+(?P<second_new_cost>\d+)\s*\.?",
+        text.strip(),
+        re.I,
+    )
+    if discard_cost_chain:
+        def _cost_branch(cost: str, card_name: str, new_cost: str) -> dict[str, Any]:
+            return {
+                "kind": "conditional",
+                "condition": {"state": "card_cost", "cmp": "eq", "value": int(cost)},
+                "effects": [
+                    {"kind": "add_to_hand", "count": 1, "source_card_name": card_name.strip(" .")},
+                    # ``set its cost`` refers to the card just created in
+                    # hand, not to the discarded source card.
+                    {"kind": "set_cost", "target": {"scope": "previous_add"}, "amount": int(new_cost)},
+                ],
+            }
+        first_branch = _cost_branch(
+            discard_cost_chain.group("first_cost"),
+            discard_cost_chain.group("first_name"),
+            discard_cost_chain.group("first_new_cost"),
+        )
+        second_branch = _cost_branch(
+            discard_cost_chain.group("second_cost"),
+            discard_cost_chain.group("second_name"),
+            discard_cost_chain.group("second_new_cost"),
+        )
+        first_branch["else_effects"] = [second_branch]
+        # The predicates belong to the nested branches, not to the outer
+        # on-discard ability; otherwise a cost-5 card would be blocked by the
+        # first cost-7 check before it can reach the else branch.
+        node["conditions"] = []
+        node["effects"].append(first_branch)
+        node["confidence"] = 1.0
+        return node
+    # ``remove all abilities`` is a distinct operation, not a keyword grant.
+    # Keep the selected target (including its count/filter) so a subsequent
+    # damage effect applies to exactly the same entities.
+    remove_abilities_text = re.sub(
+        r'(?i)["“「『]\s*(?:last\s+words|谢幕曲)\s*[:：][^"”」』]*["”」』]',
+        "",
+        text,
+    )
+    remove_abilities_match = re.search(
+        r"\bremove\s+all\s+(?:of\s+)?(?:its|their|the\s+)?\s*abilities\b"
+        r"|\bremove\s+all\s+abilities\s+from\b"
+        r"|失去所有能力",
+        remove_abilities_text,
+        re.I,
+    )
+    if remove_abilities_match:
+        node["effects"].append({"kind": "remove_abilities", "target": target or {"scope": "any"}})
+    # Deferred keyword abilities are kept as status nodes rather than being
+    # mistaken for immediate effects.  The prefix before the quote contains
+    # the actual recipient (for example, all allied Puppetry followers).
+    last_words_match = re.search(
+        r"(?P<prefix>\bgive\s+.+?)(?:\"|“)[\s]*last\s+words\s*:\s*(?P<body>[^\"”]+)(?:\"|”)" ,
+        text,
+        re.I,
+    )
+    last_words_target = None
+    if last_words_match:
+        # For ``Select ... and give it Last Words ...`` resolve the selected
+        # entity from the full prefix before the quoted body.  Looking only at
+        # ``give it`` would otherwise fall back to ``self``.
+        before_quote = text[:last_words_match.start()].strip()
+        last_words_target = _target(before_quote) or _target(last_words_match.group("prefix"))
+    if last_words_match:
+        last_words_body = last_words_match.group("body").strip()
+        status_effect: dict[str, Any] = {
+            "kind": "grant_status",
+            "status": f"Last Words: {last_words_body}",
+            "target": last_words_target or {"scope": "self"},
+        }
+        # Parse the quoted body with the same conservative grammar as a
+        # normal clause, but attach it to an explicit deferred trigger.  This
+        # handles simple nested effects (exact-copy, damage, draw, summon,
+        # and their combinations) without treating them as immediate effects
+        # of the granting card.  Any genuinely unsupported remainder remains
+        # visible as ``unsupported_nested`` below.
+        nested = clause_to_ast({
+            **clause,
+            "plain": last_words_body,
+            "trigger": "on_last_word",
+            "mode_override": None,
+        })
+        nested_effects = _normalize_last_words_effects(nested.get("effects", []))
+        nested_unparsed = list(nested.get("unparsed", [])) + list(nested.get("unparsed_clauses", []))
+        if nested_effects:
+            status_effect["ability"] = {"trigger": "on_last_word", "effects": nested_effects}
+        node["effects"].append(status_effect)
+        if not nested_effects or nested_unparsed:
+            # Preserve the body exactly enough for a report while avoiding a
+            # duplicate marker for a fully parsed nested ability.
+            node["unparsed_clauses"].append(f"unsupported_nested:Last Words: {last_words_body}")
+    # Bodies inside a quoted Last Words/谢幕曲 status are deferred until the
+    # host follower dies.  Remove those quoted bodies from immediate-effect
+    # matching so ``Summon a copy of this card`` is not emitted at play time.
+    immediate_text = re.sub(
+        r'(?i)["“「『]\s*(?:last\s+words|谢幕曲)\s*[:：][^"”」』]*["”」』]',
+        "",
+        text,
+    )
     # Some cards put an Enhance/Super-Evolve replacement in a separate
     # sentence. Preserve the relation explicitly instead of pretending it is
     # an independent effect or discarding its dependence on the base clause.
     instead_patterns = (
         (r"select\s+(\d+)\s+instead", "selection_count"),
         (r"add\s+(\d+)(?:\s+copies)?\s+instead", "count"),
+        (r"summon\s+(\d+)(?:\s+copies)?\s+instead", "count"),
         (r"deal\s+(\d+)\s+damage instead", "amount"),
         (r"deal damage to\s+(\d+)\s+random enemy followers? instead", "target_count"),
         (r"do it\s+(\d+)\s+times instead", "repeat_count"),
@@ -372,24 +1182,428 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
             branch_text = alternative.group(2).strip()
             branch_effects = _damage_effects(branch_text)
             base_effects = _damage_effects(base_text)
+            repeat_instead = re.search(r"do\s+(?:this|it)\s+(\d+|x)\s+times?(?:\s+instead)?\s*$", branch_text, re.I)
+            if repeat_instead and base_effects:
+                repeat_value = next(item for item in repeat_instead.groups() if item)
+                repeat_value = int(repeat_value) if repeat_value.isdigit() else "var:X"
+                # ``base_effects`` may already be wrapped as ``repeat 1``;
+                # unwrap that neutral wrapper before constructing the branch
+                # so the requested count is represented exactly once.
+                base_action = base_effects[0]
+                if base_action.get("kind") == "repeat" and base_action.get("effects"):
+                    base_action = base_action["effects"][0]
+                branch_effects = [{"kind": "repeat", "count": repeat_value, "effects": [base_action]}]
+            if not branch_effects:
+                # Rally/Combo replacements such as “Add 2 copies instead”
+                # carry the card identity in the base sentence.  Reparse the
+                # base sentence once and change only the matching add/summon
+                # count; the replacement must not invent a card name.
+                count_instead = re.search(r"(?:add|summon)\s+(\d+)(?:\s+copies)?(?:\s+instead)?\s*$", branch_text, re.I)
+                if count_instead:
+                    base_node = clause_to_ast({**clause, "plain": base_text})
+                    if not base_effects:
+                        base_effects = list(base_node.get("effects", []))
+                    base_effect = next((item for item in base_node.get("effects", []) if item.get("kind") in ("add_to_hand", "summon")), None)
+                    if base_effect:
+                        replacement = dict(base_effect)
+                        replacement["count"] = int(count_instead.group(1))
+                        branch_effects = [replacement]
+            if not branch_effects and base_effects:
+                base_effect = next((item for item in base_effects if item.get("kind") in ("damage", "heal", "repeat")), None)
+                amount_instead = re.search(r"(?:deal|restore)\s+(\d+)\s+(?:damage|defense)", branch_text, re.I)
+                target_count_instead = re.search(r"deal\s+damage\s+to\s+(\d+)\s+random enemy followers?", branch_text, re.I)
+                if base_effect and amount_instead:
+                    if base_effect.get("kind") == "repeat" and base_effect.get("effects"):
+                        base_effect = base_effect["effects"][0]
+                    replacement = dict(base_effect)
+                    replacement["amount"] = int(amount_instead.group(1))
+                    branch_effects = [replacement]
+                elif base_effect and target_count_instead:
+                    replacement = dict(base_effect)
+                    replacement["target"] = dict(replacement.get("target", {}))
+                    replacement["target"]["count"] = int(target_count_instead.group(1))
+                    replacement["target"]["selection"] = "random"
+                    branch_effects = [replacement]
             if not branch_effects and base_effects and re.search(r"deal damage to all enemy followers|对对手的战场上的所有随从造成", branch_text, re.I):
                 amount = base_effects[0].get("amount", 0)
                 branch_effects = [{"kind": "damage", "target": {"scope": "enemy_follower", "selection": "all"}, "amount": amount}]
-            if branch_effects:
+            if branch_effects and base_effects:
+                # The condition is owned by the explicit conditional node;
+                # leaving it on the outer ability would incorrectly suppress
+                # the base branch when the threshold is not met.  The
+                # ``instead`` relation emitted before this block is likewise
+                # redundant once both branches are materialized.
+                node["conditions"] = [
+                    condition for condition in node["conditions"]
+                    if not (condition.get("state") == ("play_count" if re.search(r"combo|连击", alternative.group(0), re.I) else "rally") and condition.get("value") == int(alternative.group(1)))
+                ]
                 state_name = "play_count" if re.search(r"combo|连击", alternative.group(0), re.I) else "rally"
-                node["effects"].append({"kind": "conditional", "condition": {"state": state_name, "cmp": "gte", "value": int(alternative.group(1))}, "effects": branch_effects, "else_effects": base_effects})
+                condition = {"state": state_name, "cmp": "gte", "value": int(alternative.group(1))}
+                affected_index = next((
+                    index for index, item in enumerate(base_effects)
+                    if item.get("kind") in ("damage", "heal", "repeat", "add_to_hand", "summon")
+                ), 0)
+                conditional = {"kind": "conditional", "condition": condition, "effects": branch_effects, "else_effects": [base_effects[affected_index]]}
+                node["effects"] = list(base_effects)
+                node["effects"][affected_index] = conditional
+                node["_dedupe_top_level_effects"] = True
+        else:
+            # Generic “If ..., <replacement> instead” clauses.  Only
+            # materialize them when the condition extractor understands the
+            # predicate; unknown predicates stay partial rather than being
+            # applied unconditionally by the compiler.
+            generic_if = re.search(r"\s+if\s+(.+),\s*(.+?)\s+instead\.?$", text, re.I)
+            if generic_if:
+                base_text = text[:generic_if.start()].strip()
+                branch_text = generic_if.group(2).strip()
+                parsed_conditions = _conditions(generic_if.group(1))
+                base_node = clause_to_ast({**clause, "plain": base_text}) if parsed_conditions else {}
+                branch_node = clause_to_ast({**clause, "plain": branch_text}) if parsed_conditions else {}
+                base_effects = base_node.get("effects", []) if isinstance(base_node, dict) else []
+                branch_effects = branch_node.get("effects", []) if isinstance(branch_node, dict) else []
+                if parsed_conditions and base_effects and not branch_effects:
+                    amount_match = re.search(r"(?:deal\s+|restore\s+)(\d+)\s+(?:damage|defense)", branch_text, re.I)
+                    repeat_match = re.search(r"do\s+(?:this|it)\s+(\d+|x)\s+times?", branch_text, re.I)
+                    count_match = re.search(r"(?:add|summon)\s+(\d+)(?:\s+copies)?", branch_text, re.I)
+                    if amount_match:
+                        amount = int(amount_match.group(1))
+                        base_effect = next((item for item in base_effects if item.get("kind") in ("damage", "heal")), None)
+                        if base_effect:
+                            replacement = dict(base_effect)
+                            replacement["amount"] = amount
+                            branch_effects = [replacement]
+                    elif repeat_match:
+                        repeat_value = repeat_match.group(1)
+                        repeat_value = int(repeat_value) if repeat_value.isdigit() else "var:X"
+                        base_effect = next((item for item in base_effects if item.get("kind") in ("damage", "heal", "repeat")), None)
+                        if base_effect:
+                            if base_effect.get("kind") == "repeat" and base_effect.get("effects"):
+                                base_effect = base_effect["effects"][0]
+                            branch_effects = [{"kind": "repeat", "count": repeat_value, "effects": [dict(base_effect)]}]
+                    elif count_match:
+                        base_effect = next((item for item in base_effects if item.get("kind") in ("add_to_hand", "summon")), None)
+                        if base_effect:
+                            replacement = dict(base_effect)
+                            replacement["count"] = int(count_match.group(1))
+                            branch_effects = [replacement]
+                if parsed_conditions and base_effects and branch_effects:
+                    node["conditions"] = []
+                    condition = parsed_conditions[0] if len(parsed_conditions) == 1 else {"all": parsed_conditions}
+                    affected_index = next((
+                        index for index, item in enumerate(base_effects)
+                        if item.get("kind") in ("damage", "heal", "repeat")
+                    ), 0)
+                    affected_effect = base_effects[affected_index]
+                    conditional = {"kind": "conditional", "condition": condition, "effects": branch_effects, "else_effects": [affected_effect]}
+                    # Effects before/after the replacement (for example the
+                    # discard in “discard a card, then restore X”) remain
+                    # unconditional and keep their original order.
+                    if condition.get("state") == "selected_card_type" and any(item.get("kind") == "discard" for item in base_effects):
+                        node["effects"] = [item for item in base_effects if item is not affected_effect] + [conditional]
+                    else:
+                        node["effects"] = list(base_effects)
+                        node["effects"][affected_index] = conditional
+                    node["_dedupe_top_level_effects"] = True
+                else:
+                    node["effects"].extend(_damage_effects(text))
             else:
                 node["effects"].extend(_damage_effects(text))
-        else:
-            node["effects"].extend(_damage_effects(text))
     for condition in node["conditions"]:
         if condition.get("state") in ("cemetery", "earth_sigil"):
             node["effects"].insert(0, {"kind": "consume_resource", "resource": condition["state"], "amount": condition.get("value", 0)})
-    if re.search(r"evolve this follower|使本随从进化|本随从进化[。！]", text, re.I):
+    if re.search(r"(?<!super-)evolve this follower|使本随从进化|本随从进化[。！]", text, re.I):
         node["effects"].append({"kind": "auto_evolve", "target": {"scope": "self"}, "evolution_kind": "normal"})
+    if re.search(r"super-?evolve this follower|超进化本随从", text, re.I):
+        node["effects"].append({"kind": "auto_evolve", "target": {"scope": "self"}, "evolution_kind": "super"})
+    if re.search(r"super-?evolve them instead", text, re.I):
+        node["effects"].append({"kind": "auto_evolve", "target": {"scope": "ally_follower", "selection": "all", "filters": {"evolved": False}}, "evolution_kind": "super"})
     if re.search(r"evolve it|使其进化", text, re.I):
         node["effects"].append({"kind": "auto_evolve", "target": {"scope": "trigger_source"}, "evolution_kind": "normal"})
-    draw_match = re.search(r"draw\s+(a|an|\d+|x)\s+(cards?|spells?|followers?|amulets?)|抽[取]?(\d+|X)张?(法术|随从|护符|卡牌)", text, re.I)
+    # Dynamic selectors/copies must be recognized before the generic summon or
+    # hand-add patterns below.  They intentionally remain data selectors: the
+    # catalog/runtime resolves the concrete cards/entities at execution time.
+    dynamic_summon = False
+    dynamic_hand_copy = False
+    destroyed_amulet_copy = _selector_for_destroyed_amulet_copy(immediate_text)
+    if destroyed_amulet_copy:
+        copy_count, selector = destroyed_amulet_copy
+        selector.pop("count", None)
+        node["effects"].append({
+            "kind": "summon",
+            "count": copy_count,
+            "resource_selector": selector,
+            "copy_mode": "exact",
+            "preserve_state": True,
+        })
+        dynamic_summon = True
+    random_deck_selector = _selector_for_random_deck_summon(immediate_text)
+    if random_deck_selector:
+        summon_count = int(random_deck_selector.pop("count", 1))
+        node["effects"].append({
+            "kind": "summon",
+            "count": summon_count,
+            "resource_selector": random_deck_selector,
+        })
+        dynamic_summon = True
+    historical_copy = _selector_for_historical_copy(immediate_text)
+    if historical_copy and not dynamic_summon:
+        copy_count, selector = historical_copy
+        selector.pop("count", None)
+        node["effects"].append({
+            "kind": "summon",
+            "count": copy_count,
+            "resource_selector": selector,
+            "copy_mode": "exact",
+            "preserve_state": True,
+        })
+        dynamic_summon = True
+    enemy_named_summon = re.search(
+        r"\bsummon\s+(?P<count>\d+|an?)\s+enemy\s+"
+        r"(?:exact\s+)?copies?\s+of\s+(?P<name>[^.;\"]+)",
+        immediate_text,
+        re.I,
+    )
+    if enemy_named_summon:
+        raw_count = enemy_named_summon.group("count")
+        node["effects"].append({
+            "kind": "summon",
+            "count": int(raw_count) if raw_count.isdigit() else 1,
+            "source_card_name": enemy_named_summon.group("name").strip(),
+            "target": {"scope": "enemy_follower"},
+        })
+        dynamic_summon = True
+    historical_hand_copy = _selector_for_historical_hand_copy(immediate_text)
+    if historical_hand_copy:
+        copy_count, selector, destination, is_exact = historical_hand_copy
+        node["effects"].append({
+            "kind": "copy",
+            "source": selector,
+            "destination": destination,
+            "count": copy_count,
+            "copy_mode": "exact" if is_exact else "card",
+            "preserve_state": bool(is_exact),
+            "reveal": False if re.search(r"without\s+revealing", immediate_text, re.I) else True,
+        })
+        dynamic_hand_copy = True
+    random_deck_copy = _selector_for_random_deck_copy(immediate_text)
+    if random_deck_copy:
+        copy_count, selector, destination, is_exact = random_deck_copy
+        node["effects"].append({
+            "kind": "copy",
+            "source": selector,
+            "destination": destination,
+            "count": copy_count,
+            "copy_mode": "exact" if is_exact else "card",
+            "preserve_state": bool(is_exact),
+            "reveal": False if re.search(r"without\s+revealing", immediate_text, re.I) else True,
+        })
+        dynamic_hand_copy = True
+    leftmost_hand_copy = _selector_for_leftmost_hand_copy(immediate_text)
+    if leftmost_hand_copy:
+        copy_count, selector = leftmost_hand_copy
+        node["effects"].append({
+            "kind": "copy",
+            "source": selector,
+            "destination": "hand",
+            "count": copy_count,
+            "copy_mode": "exact",
+            "preserve_state": True,
+            "reveal": False if re.search(r"without\s+revealing", immediate_text, re.I) else True,
+        })
+        dynamic_hand_copy = True
+    selected_hand = _selected_hand_selector(immediate_text)
+    selected_hand_copy = re.search(
+        r"select\s+(?:\d+|an?|a)\s+[A-Za-z][\w-]*\s+(?:followers?|amulets?|spells?|cards?)\s+"
+        r"in\s+your\s+hand(?:\s+that\s+costs?\s+\d+\s+or\s+less)?\s*,?\s*(?:and\s+)?"
+        r"summon\s+(?:an?\s+)?exact\s+copy\s+of\s+(?:each|it|them)",
+        immediate_text,
+        re.I,
+    )
+    if selected_hand and selected_hand_copy and not dynamic_summon:
+        copy_count, selector = selected_hand
+        node["effects"].append({
+            "kind": "copy",
+            "source": selector,
+            "destination": "field",
+            "count": copy_count,
+            "copy_mode": "exact",
+            "preserve_state": True,
+        })
+        dynamic_summon = True
+    selected_enemy_copy = re.search(
+        r"select\s+(?:an?|\d+)\s+enemy\s+follower\s+on\s+the\s+field"
+        r"(?:\s+with\s+(?P<limit>\d+)\s+(?P<stat>defense|attack)\s+or\s+less)?\s*,?\s*"
+        r"(?:banish|destroy)\s+it\s*(?:,\s*)?(?:and\s+)?summon\s+(?:an?\s+)?exact\s+copy\s+of\s+it",
+        immediate_text,
+        re.I,
+    )
+    if selected_enemy_copy and not dynamic_summon:
+        filters: dict[str, Any] = {"side": "enemy", "card_type": "follower"}
+        if selected_enemy_copy.group("limit"):
+            filters["max_life" if selected_enemy_copy.group("stat").lower() == "defense" else "max_attack"] = int(selected_enemy_copy.group("limit"))
+        node["effects"].append({
+            "kind": "copy",
+            "source": _source_selector(zone="field", selection="chosen", filters=filters),
+            "destination": "field",
+            "count": 1,
+            "copy_mode": "exact",
+            "preserve_state": True,
+        })
+        dynamic_summon = True
+    exact_copy_status = re.search(
+        r"give\s+(?:the\s+)?exact\s+cop(?:y|ies)\s+\"(?P<body>[^\"]+)\"",
+        immediate_text,
+        re.I,
+    )
+    if exact_copy_status and any(item.get("kind") == "copy" for item in node["effects"]):
+        status_body = exact_copy_status.group("body").strip()
+        status_effect: dict[str, Any] = {
+            "kind": "grant_status",
+            "status": status_body,
+            "target": {"scope": "previous_copy"},
+        }
+        end_turn_destroy = re.fullmatch(
+            r"at\s+the\s+end\s+of\s+your\s+opponent's\s+turn\s*,?\s*destroy\s+this\s+card\.??",
+            status_body,
+            re.I,
+        )
+        if end_turn_destroy:
+            status_effect["ability"] = {
+                "trigger": "on_opponent_turn_end",
+                "effects": [{"kind": "destroy", "target": {"scope": "trigger_source"}}],
+            }
+        node["effects"].append(status_effect)
+        node["unparsed_clauses"].append(f"unsupported_nested:status:{status_body}")
+    if dynamic_summon and re.search(r"super-?evolve\s+(?:it|them)", immediate_text, re.I):
+        node["effects"] = [
+            item for item in node["effects"]
+            if not (item.get("kind") == "auto_evolve" and isinstance(item.get("target"), dict) and item["target"].get("scope") == "trigger_source")
+        ]
+        node["effects"].append({"kind": "auto_evolve", "target": {"scope": "previous_summon"}, "evolution_kind": "super"})
+    elif dynamic_summon and re.search(r"(?<!super-)evolve\s+(?:it|them)", immediate_text, re.I):
+        node["effects"] = [
+            item for item in node["effects"]
+            if not (item.get("kind") == "auto_evolve" and isinstance(item.get("target"), dict) and item["target"].get("scope") == "trigger_source")
+        ]
+        node["effects"].append({"kind": "auto_evolve", "target": {"scope": "previous_summon"}, "evolution_kind": "normal"})
+    # ``Summon (an) exact copy/copy of this card/it`` refers to an entity, not
+    # a static catalog card.  Preserve its current attack/life, damage,
+    # keywords, and evolution state when the runtime materializes the copy.
+    exact_copy = re.search(
+        r"\bsummon\s+(?:(?P<count>\d+)\s+)?(?:an?\s+)?(?:exact\s+)?cop(?:y|ies)\s+of\s+"
+        r"(?P<source>this\s+card|this\s+follower|this\s+amulet|itself|themselves|it|them|the\s+selected\s+(?:card|follower|amulet))\b",
+        immediate_text,
+        re.I,
+    )
+    if exact_copy and not dynamic_summon:
+        copy_source = _copy_source_scope(exact_copy.group("source"))
+        if copy_source.get("scope") == "previous_target" and re.search(r"this\s+card's\s+cost|本卡牌的费用", immediate_text, re.I):
+            copy_source = {"scope": "self"}
+        if copy_source.get("scope") == "previous_target" and re.search(r"this\s+(?:card|follower)\s+enters?\s+the\s+field|进入战场", immediate_text, re.I):
+            copy_source = {"scope": "trigger_source"}
+        node["effects"].append({
+            "kind": "copy",
+            "source": copy_source,
+            "destination": "field",
+            "count": int(exact_copy.group("count") or 1),
+            "copy_mode": "exact",
+            "preserve_state": True,
+        })
+        dynamic_summon = True
+    copy_buff = re.search(
+        r"give\s+(?:the\s+)?exact\s+cop(?:y|ies)\s+([+-](?:\d+|x))/([+-](?:\d+|x))",
+        immediate_text,
+        re.I,
+    )
+    if copy_buff and any(item.get("kind") == "copy" for item in node["effects"]):
+        attack = int(copy_buff.group(1)) if copy_buff.group(1).lstrip("+-").isdigit() else "var:X"
+        life = int(copy_buff.group(2)) if copy_buff.group(2).lstrip("+-").isdigit() else "var:X"
+        node["effects"].append({"kind": "buff", "target": {"scope": "previous_copy"}, "attack": attack, "life": life})
+    # Copy a selected board follower into hand and apply a modifier to that
+    # newly-created card.  The source selector carries the base-cost filter;
+    # no concrete card id is guessed from the prose.
+    selected_copy_to_hand = re.search(
+        r"select\s+(?:an?|\d+)\s+(?:allied\s+)?follower\s+on\s+the\s+field"
+        r"(?:\s+with\s+a\s+base\s+cost\s+of\s+(?P<min_cost>\d+)\s+or\s+more)?\s*,?\s*"
+        r"add\s+(?:an?\s+)?copy\s+of\s+it\s+to\s+your\s+hand"
+        r"(?:\s+without\s+revealing\s+it)?[\s,]*(?:and\s+reduce\s+the\s+cost\s+of\s+the\s+copy\s+by\s+(?P<delta>\d+))?",
+        immediate_text,
+        re.I,
+    )
+    if selected_copy_to_hand:
+        filters: dict[str, Any] = {"side": "ally", "card_type": "follower"}
+        if selected_copy_to_hand.group("min_cost"):
+            filters["min_base_cost"] = int(selected_copy_to_hand.group("min_cost"))
+        node["effects"].append({
+            "kind": "copy",
+            "source": _source_selector(zone="field", selection="chosen", filters=filters),
+            "destination": "hand",
+            "count": 1,
+            "copy_mode": "card",
+            "preserve_state": False,
+            "reveal": False,
+            **({"cost_delta": -int(selected_copy_to_hand.group("delta"))} if selected_copy_to_hand.group("delta") else {}),
+        })
+        dynamic_hand_copy = True
+    selected_destroy_copy = re.search(
+        r"select\s+(?:an?|\d+)\s+enemy\s+follower\s+on\s+the\s+field\s*,?\s*"
+        r"destroy\s+it\s*(?:,\s*)?(?:and\s+)?add\s+(?:an?\s+)?copy\s+of\s+it\s+to\s+your\s+hand",
+        immediate_text,
+        re.I,
+    )
+    if selected_destroy_copy:
+        node["effects"].append({
+            "kind": "copy",
+            "source": _source_selector(zone="field", side="enemy", selection="chosen", filters={"card_type": "follower"}),
+            "destination": "hand",
+            "count": 1,
+            "copy_mode": "card",
+            "preserve_state": False,
+        })
+        dynamic_hand_copy = True
+    selected_enemy_card_copy = re.search(
+        r"select\s+an?\s+enemy\s+card\s+on\s+the\s+field\s*,?\s*"
+        r"(?P<remove>banish|destroy)\s+it\s*(?:,\s*)?(?:and\s+)?"
+        r"add\s+(?:an?\s+)?copy\s+of\s+it\s+to\s+your\s+hand",
+        immediate_text,
+        re.I,
+    )
+    if selected_enemy_card_copy:
+        node["effects"].append({
+            "kind": "copy",
+            "source": _source_selector(
+                zone="field",
+                side="enemy",
+                selection="chosen",
+                filters={"card_type": "field_card"},
+            ),
+            "destination": "hand",
+            "count": 1,
+            "copy_mode": "card",
+            "preserve_state": False,
+        })
+        dynamic_hand_copy = True
+    # Exact copy of a random card in the opponent's hand, followed by an
+    # ordinary draw.  Keep the two effects in source order.
+    opponent_hand_copy = re.search(
+        r"add\s+an?\s+exact\s+copy\s+of\s+a\s+random\s+card\s+in\s+your\s+opponent's\s+hand"
+        r"\s+to\s+your\s+hand\s+without\s+revealing\s+it(?:\s+and\s+reduce\s+its\s+cost\s+by\s+(?P<delta>\d+))?",
+        immediate_text,
+        re.I,
+    )
+    if opponent_hand_copy:
+        node["effects"].append({
+            "kind": "copy",
+            "source": _source_selector(zone="hand", side="enemy", selection="random", filters={"card_type": "card"}),
+            "destination": "hand",
+            "count": 1,
+            "copy_mode": "exact",
+            "preserve_state": True,
+            "reveal": False,
+            **({"cost_delta": -int(opponent_hand_copy.group("delta"))} if opponent_hand_copy.group("delta") else {}),
+        })
+        dynamic_hand_copy = True
+    draw_match = re.search(r"draw\s+(a|an|\d+|x)\s+(cards?|spells?|followers?|amulets?)|抽[取]?(\d+|X)张?(法术|随从|护符|卡牌)", immediate_text, re.I)
     if draw_match:
         value = next((x for x in draw_match.groups() if x), "1")
         card_kind = draw_match.group(2) or draw_match.group(4) or ""
@@ -401,19 +1615,38 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         elif re.search(r"amulet|护符", card_kind, re.I):
             draw_node["target"] = {"scope": "any", "filters": {"zone": "deck", "card_type": "amulet"}}
         node["effects"].append(draw_node)
-    summon_match = re.search(r"summon\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+)|召唤\s*(\d+)?\s*(?:个|张)?『([^』]+)』", text, re.I)
+    summon_match = None if dynamic_summon else re.search(r"summon\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+)|召唤\s*(\d+)?\s*(?:个|张)?『([^』]+)』", immediate_text, re.I)
     if summon_match:
         count_value = summon_match.group(1) or summon_match.group(3) or "1"
-        card_name = (summon_match.group(2) or summon_match.group(4) or "").strip()
-        node["effects"].append({"kind": "summon", "count": int(count_value), "source_card_name": card_name})
-    if _is_destroy_action(text):
-        node["effects"].append({"kind": "destroy", "target": target or {"scope": "any"}})
+        raw_names = (summon_match.group(2) or summon_match.group(4) or "").strip()
+        names, trailer = _split_card_names(raw_names)
+        # ``Summon 2 instead`` is a replacement relation, not a summon of a
+        # card literally named “2 instead”.  Leave it to the instead parser.
+        if not (len(names) == 1 and re.fullmatch(r"\d+(?:\s+copies)?(?:\s+instead)?", names[0], re.I)):
+            summon_count = int(count_value)
+            for name in names:
+                if name:
+                    node["effects"].append({"kind": "summon", "count": summon_count, "source_card_name": name})
+            if trailer:
+                child = clause_to_ast({**clause, "plain": trailer})
+                node["effects"].extend(child.get("effects", []))
+    action_text = re.sub(r'["“「『][^"”」』]*["”」』]', "", immediate_text)
+    if _is_destroy_action(action_text):
+        destroy_target = {"scope": "self"} if re.search(r"destroy\s+this\s+card|破坏本卡牌", action_text, re.I) else (target or {"scope": "any"})
+        node["effects"].append({"kind": "destroy", "target": destroy_target})
     if re.search(r"\bstorm\b|【疾驰】", text, re.I):
-        node["effects"].append({"kind": "grant_keyword", "keyword": "storm", "target": {"scope": "self"}})
+        storm_target = last_words_target or target or {"scope": "self"}
+        node["effects"].append({"kind": "grant_keyword", "keyword": "storm", "target": storm_target})
     if re.search(r"\brush\b|【突进】", text, re.I):
-        node["effects"].append({"kind": "grant_keyword", "keyword": "rush", "target": {"scope": "self"}})
+        rush_target = last_words_target or target or {"scope": "self"}
+        node["effects"].append({"kind": "grant_keyword", "keyword": "rush", "target": rush_target})
     if re.search(r"\bward\b|【守护】", text, re.I):
-        node["effects"].append({"kind": "grant_keyword", "keyword": "ward", "target": {"scope": "self"}})
+        # A trailing keyword in “give all allied followers ... and Ward”
+        # shares the preceding recipient.  Do not reuse a leader target from
+        # an unrelated damage/heal sentence; bare Ward still means self.
+        candidate = target if isinstance(target, dict) and target.get("scope") not in ("enemy_leader", "ally_leader") else None
+        ward_target = last_words_target or candidate or {"scope": "self"}
+        node["effects"].append({"kind": "grant_keyword", "keyword": "ward", "target": ward_target})
     if re.search(r"activate all of them instead|改为发动所有能力", text, re.I):
         node["effects"].append({"kind": "activate_all_mode_choices"})
     for keyword, pattern in (("bane", r"\bbane\b"), ("ambush", r"\bambush\b"), ("aura", r"\baura\b"), ("barrier", r"\bbarrier\b")):
@@ -547,10 +1780,54 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
     attacks_match = re.search(r"can attack\s+(\d+)\s+times per turn|1回合可以攻击\s*(\d+)\s*次", text, re.I)
     if attacks_match:
         node["effects"].append({"kind": "set_attacks", "target": {"scope": "self"}, "amount": int(next(item for item in attacks_match.groups() if item))})
-    quoted_status = re.search(r"give\s+(?:this follower|it|them)\s+\"([^\"]+)\"(?:\s+until\s+(.+?))?(?:\.|$)", text, re.I)
-    if quoted_status:
-        status_target = target or {"scope": "self"}
-        node["effects"].append({"kind": "grant_status", "status": quoted_status.group(1).strip(), "target": status_target, "duration": (quoted_status.group(2) or "permanent").strip(" .")})
+    # Stop a temporary-status duration at the next chained effect.  The
+    # previous non-greedy expression still consumed the whole remainder of a
+    # comma-separated trigger, turning ``until ... turn, deal 1 damage`` into
+    # one giant duration string and hiding the damage clause.
+    quoted_status = re.search(
+        r"give\s+(?:this follower|it|them)\s+\"([^\"]+)\""
+        r"(?:\s+until\s+(.+?))?(?=,\s*(?:and\s+)?(?:deal|restore|destroy|summon|give|draw|add|return|banish|evolve|do)\b|[.;]|$)",
+        text,
+        re.I,
+    )
+    damage_taken_modifier = re.search(
+        r"(?:give|grant)\s+(?:the\s+)?enemy\s+leader\s+"
+        r"[\"“]\s*takes\s+(?P<amount>\d+)\s+more\s+damage\s*\.?\s*[\"”]",
+        text,
+        re.I,
+    )
+    if damage_taken_modifier:
+        node["effects"].append({
+            "kind": "modify_damage_taken",
+            "target": {"scope": "enemy_leader"},
+            "amount": int(damage_taken_modifier.group("amount")),
+            "duration": "permanent",
+        })
+    faith_mode_ability = re.search(
+        r"give\s+(?:it|your\s+faith|the\s+faith)\s+\"\s*increase\s+the\s+number\s+of\s+modes?\s+you\s+can\s+select\s+by\s+(\d+)\s*\.??\s*\"",
+        text,
+        re.I,
+    )
+    if faith_mode_ability:
+        node["effects"].append({
+            "kind": "grant_resource_ability",
+            "resource": "faith",
+            "ability": {
+                "trigger": "on_mode_selected",
+                # This is a persistent Mode-capacity bonus, not a Faith
+                # value increment.  Keep the field explicit so selecting a
+                # Mode updates the correct per-Faith-instance counter.
+                "effects": [{"kind": "modify_resource", "resource": "faith", "field": "mode_limit", "amount": int(faith_mode_ability.group(1))}],
+            },
+        })
+    if quoted_status and not last_words_match and not faith_mode_ability:
+        # In a summon trigger, ``give it`` refers to the follower that caused
+        # the trigger, not to an arbitrary enemy selected from the sentence.
+        status_target = {"scope": "trigger_source"} if re.search(r"(?:whenever|when)\s+an?\s+enemy\s+follower\s+enters?\s+the\s+field", text, re.I) else (target or {"scope": "self"})
+        duration = (quoted_status.group(2) or "permanent").strip(" .")
+        if duration.casefold() in {"the end of your opponent's turn", "the end of your opponent’s turn"}:
+            duration = "until_end_of_opponent_turn"
+        node["effects"].append({"kind": "grant_status", "status": quoted_status.group(1).strip(), "target": status_target, "duration": duration})
     reanimate_values = re.findall(r"reanimate\s*\((\d+)\)|亡者召还[_ ]?(\d+)", text, re.I)
     for values in reanimate_values:
         node["effects"].append({"kind": "reanimate", "cost": int(next(item for item in values if item))})
@@ -567,9 +1844,39 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         node["effects"].append({"kind": "modify_resource", "resource": "earth_sigil", "amount": int(amount)})
     if re.search(r"select a card in your hand and discard it|选择自己的1张手牌，?舍弃", text, re.I):
         node["effects"].append({"kind": "discard", "target": {"scope": "any", "selection": "chosen", "count": 1, "filters": {"zone": "hand"}}})
+    if re.search(r"\bdiscard\s+your\s+hand\b|舍弃自己的手牌", text, re.I):
+        node["effects"].append({"kind": "discard", "target": {"scope": "any", "selection": "all", "filters": {"zone": "hand"}}})
     if re.search(r"invoke this card|瞬念召唤.*本卡牌", text, re.I):
         node["effects"].append({"kind": "invoke", "target": {"scope": "self"}})
-    banish_match = re.search(r"banish\s+(all|a|an)?\s*(random\s+)?(?:copies of\s+[^.]+?\s+from your deck|enemy followers?|enemy follower)|使.*消失", text, re.I)
+    # Explicit field-wide banish choices.  These are deliberately more
+    # specific than the generic ``enemy follower`` pattern because Bahamut's
+    # mode text affects *all* cards of a type on the field, not one chosen
+    # enemy target.  Crests are a resource rather than a board card, so use
+    # the canonical destroy_crest operation for that choice.
+    specific_banish = False
+    if re.search(r"banish\s+all\s+other\s+followers?\s+from\s+the\s+field|使战场上的其他所有随从消失", text, re.I):
+        node["effects"].append({
+            "kind": "banish",
+            "target": {
+                "scope": "any",
+                "selection": "all",
+                "filters": {"zone": "field", "card_type": "follower", "exclude_source": True},
+            },
+        })
+        specific_banish = True
+    if re.search(r"banish\s+all\s+amulets?\s+from\s+the\s+field|使战场上的所有护符消失", text, re.I):
+        node["effects"].append({
+            "kind": "banish",
+            "target": {"scope": "any", "selection": "all", "filters": {"zone": "field", "card_type": "amulet"}},
+        })
+        specific_banish = True
+    if re.search(r"banish\s+all\s+crests?|使所有纹章消失", text, re.I):
+        node["effects"].append({
+            "kind": "destroy_crest",
+            "target": {"scope": "any", "selection": "all", "filters": {"zone": "crests"}},
+        })
+        specific_banish = True
+    banish_match = None if specific_banish else re.search(r"banish\s+(all|a|an)?\s*(random\s+)?(?:copies of\s+[^.]+?\s+from your deck|enemy followers?|enemy follower)|使.*消失", text, re.I)
     if banish_match:
         banish_target = target or {"scope": "any"}
         if "random" in text.lower() and banish_target.get("selection") is None:
@@ -604,9 +1911,10 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         if variable_cost_draw.group(1).lower() != "card":
             filters["card_type"] = variable_cost_draw.group(1).lower()
         node["effects"].append({"kind": "draw", "count": 1, "target": {"scope": "any", "filters": filters}})
-    crest_gain = re.search(r"gain crest\s*:\s*([^.]+)", text, re.I)
+    crest_gain = re.search(r"gain crest\s*:\s*(.+?)(?=\s+and\s+(?:return|give|destroy)\b|\s+fanfare\s*:|[。；;\"」]|$)", text, re.I)
     if crest_gain:
-        node["effects"].append({"kind": "gain_crest", "source_card_name": crest_gain.group(1).strip(), "target": {"scope": "enemy_leader" if re.search(r"give your opponent crest", text, re.I) else "ally_leader"}})
+        crest_name = crest_gain.group(1).strip().rstrip(".")
+        node["effects"].append({"kind": "gain_crest", "source_card_name": crest_name, "target": {"scope": "enemy_leader" if re.search(r"give your opponent crest", text, re.I) else "ally_leader"}})
     if re.search(r"evolve all unevolved allied followers", text, re.I):
         node["effects"].append({"kind": "auto_evolve", "target": {"scope": "ally_follower", "selection": "all", "filters": {"evolved": False}}, "evolution_kind": "normal"})
     named_allied_buff = re.search(r"give all allied copies of\s+(.+?)\s+on the field\s+([+-]\d+)/([+-]\d+)", text, re.I)
@@ -636,7 +1944,7 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         node["effects"].append({"kind": "fusion_config", "config": {"filters": {}}})
     if re.search(r"return it to (?:the )?deck|使其返回牌组", text, re.I):
         node["effects"].append({"kind": "return_to_deck", "target": {"scope": "any", "selection": "chosen", "count": 1}})
-    if re.search(r"return (?:it|an enemy follower|another allied card) to hand", text, re.I):
+    if re.search(r"return (?:it|this card|an enemy follower|another allied card) to hand", text, re.I):
         node["effects"].append({"kind": "return_to_hand", "target": target or {"scope": "any", "selection": "chosen", "count": 1}})
     counter_match = re.search(r"engage\s*(?:\((\d+)\))?\s*:\s*advance this amulet's count by\s*(\d+|x)", text, re.I)
     if not counter_match:
@@ -658,16 +1966,227 @@ def clause_to_ast(clause: dict[str, Any]) -> dict[str, Any]:
         else:
             pairs = ((int(multi_add.group(3) or 1), multi_add.group(4)), (int(multi_add.group(5) or 1), multi_add.group(6)))
         for count_value, card_name in pairs:
-            node["effects"].append({"kind": "add_to_hand", "count": count_value, "source_card_name": card_name.strip()})
-    add_match = None if multi_add else re.search(r"add\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+?)\s+to your hand|将\s*(\d+)?\s*张?『([^』]+)』加入手牌", text, re.I)
+            for name in _split_card_names(card_name)[0]:
+                if name:
+                    node["effects"].append({"kind": "add_to_hand", "count": count_value, "source_card_name": name})
+    add_match = None if (multi_add or dynamic_hand_copy) else re.search(r"add\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+?)\s+to your hand|将\s*(\d+)?\s*张?『([^』]+)』加入手牌", immediate_text, re.I)
     if add_match:
         count_value = add_match.group(1) or add_match.group(3) or "1"
-        card_name = (add_match.group(2) or add_match.group(4) or "").strip()
-        node["effects"].append({"kind": "add_to_hand", "count": int(count_value), "source_card_name": card_name})
+        raw_names = (add_match.group(2) or add_match.group(4) or "").strip()
+        names, trailer = _split_card_names(raw_names)
+        for name in names:
+            if name:
+                node["effects"].append({"kind": "add_to_hand", "count": int(count_value), "source_card_name": name})
+        if trailer:
+            child = clause_to_ast({**clause, "plain": trailer})
+            node["effects"].extend(child.get("effects", []))
+    # --- enhancement: patterns for previously-unparsed clauses ---
+    # Select an enemy follower/card on the field (with N defense or less) and banish it
+    banish_select = re.search(r"select\s+an?\s+enemy\s+(follower|card)\s+on\s+the\s+field(?:\s+with\s+(?P<limit>\d+)\s+(?P<stat>defense|attack) or less)?\s*(?:,\s*)?(?:and\s+)?banish\s+it\b", immediate_text, re.I)
+    if banish_select:
+        selected_type = banish_select.group(1).lower()
+        banish_scope = {
+            "scope": "enemy_follower" if selected_type == "follower" else "any",
+            "selection": "chosen",
+            "count": 1,
+            "filters": {
+                "side": "enemy",
+                "zone": "field",
+                "card_type": "follower" if selected_type == "follower" else "field_card",
+            },
+        }
+        if banish_select.group("limit"):
+            banish_scope["filters"]["max_life" if banish_select.group("stat").lower() == "defense" else "max_attack"] = int(banish_select.group("limit"))
+        node["effects"].append({"kind": "banish", "target": banish_scope})
+    banish_plural = re.search(r"select\s+(\d+)\s+enemy\s+followers?\s+on\s+the\s+field\s+and\s+banish\s+them\b", text, re.I)
+    if banish_plural:
+        node["effects"].append({"kind": "banish", "target": {"scope": "enemy_follower", "selection": "chosen", "count": int(banish_plural.group(1))}})
+    if re.search(r"banish\s+all\s+duplicates\s+from\s+your\s+deck", text, re.I):
+        node["effects"].append({"kind": "banish", "target": {"scope": "any", "selection": "all", "filters": {"zone": "deck", "duplicates_only": True}}})
+    if re.search(r"banish\s+all\s+enemy\s+copies\s+of\s+it\s+from\s+the\s+field", text, re.I):
+        node["effects"].append({"kind": "banish", "target": {"scope": "any", "selection": "all", "filters": {"zone": "field", "side": "enemy", "copies_of": {"ref": "previous_target"}}}})
+    # Give your opponent Crest: X
+    crest_opponent = re.search(r"give\s+(?:your\s+)?opponent\s+crest\s*:\s*([^。；;\"」]+)", text, re.I)
+    if crest_opponent:
+        node["effects"].append({"kind": "gain_crest", "source_card_name": crest_opponent.group(1).strip().rstrip("."), "target": {"scope": "enemy_leader"}})
+    # Advance the count of your Crest: X by N
+    crest_advance = re.search(r"advance\s+the\s+count\s+of\s+your\s+crest\s*:\s*([^。；;\"」]+?)\s+by\s+(\d+)", text, re.I)
+    if crest_advance:
+        node["effects"].append({"kind": "modify_crest", "source_card_name": crest_advance.group(1).strip(), "amount": int(crest_advance.group(2))})
+    # Draw N differently named M-cost spells/cards
+    draw_diff = re.search(r"draw\s+(\d+)\s+differently\s+named\s+(\d+)-cost\s+(spells?|cards?)", text, re.I)
+    if draw_diff:
+        diff_filters = {"zone": "deck", "max_cost": int(draw_diff.group(2)), "distinct_names": True}
+        if draw_diff.group(3).lower().startswith("spell"):
+            diff_filters["card_type"] = "spell"
+        node["effects"].append({"kind": "draw", "count": int(draw_diff.group(1)), "target": {"scope": "any", "filters": diff_filters}})
+    # When you draw this card, set its cost to N until the end of the turn
+    draw_set_cost = re.search(r"when\s+you\s+draw\s+this\s+card\s*,\s*set\s+its\s+cost\s+to\s+(\d+)\s+until\s+the\s+end\s+of\s+the\s+turn", text, re.I)
+    if draw_set_cost:
+        node["effects"].append({"kind": "set_cost", "target": {"scope": "self"}, "amount": int(draw_set_cost.group(1)), "duration": "until_end_of_turn", "trigger": "on_draw"})
+    # When this card is discarded, give a random allied follower on the field +A/+D
+    discard_buff = re.search(r"when\s+this\s+card\s+is\s+discarded\s*,\s*give\s+a\s+random\s+allied\s+follower\s+on\s+the\s+field\s+([+-]\d+)/([+-]\d+)", text, re.I)
+    if discard_buff:
+        node["effects"].append({"kind": "buff", "target": {"scope": "ally_follower", "selection": "random", "count": 1}, "attack": int(discard_buff.group(1)), "life": int(discard_buff.group(2)), "trigger": "on_discard"})
+    # Pronoun buffs: give them +A/+D (refers to an earlier selected target)
+    give_them_buff = re.search(r"give\s+them\s+([+-](?:\d+|x))/([+-](?:\d+|x))", text, re.I)
+    if give_them_buff:
+        node["effects"].append({"kind": "buff", "target": target or {"scope": "any", "selection": "chosen", "count": 1, "filters": {"zone": "field", "card_type": "follower"}}, "attack": give_them_buff.group(1), "life": give_them_buff.group(2)})
+    # Destroy X random enemy followers. X is ...
+    destroy_var = re.search(r"destroy\s+x\s+random\s+enemy\s+followers?\s*\.\s*x\s+is\s+(.+)", text, re.I)
+    if destroy_var:
+        node["effects"].append({"kind": "destroy", "target": {"scope": "enemy_follower", "selection": "random", "count": "var:X"}, "count_source": destroy_var.group(1).strip()})
+    # Halve the cost of all cards in your deck
+    if re.search(r"halve\s+the\s+cost\s+of\s+all\s+cards\s+in\s+your\s+deck", text, re.I):
+        node["effects"].append({"kind": "modify_cost", "target": {"scope": "any", "selection": "all", "filters": {"zone": "deck"}}, "operation": "halve"})
+    # Replace your deck with X
+    replace_deck = re.search(r"replace\s+your\s+deck\s+with\s+(.+)", text, re.I)
+    if replace_deck:
+        node["effects"].append({"kind": "replace_deck", "replacement": replace_deck.group(1).strip().rstrip(" .。")})
+    # Transform all allied followers on the field into exact copies of random followers in your deck
+    if re.search(r"transform\s+all\s+allied\s+followers\s+on\s+the\s+field\s+into\s+exact\s+copies\s+of\s+random\s+followers?\s+in\s+your\s+deck", text, re.I):
+        node["effects"].append({"kind": "transform", "target": {"scope": "ally_follower", "selection": "all", "filters": {"zone": "field"}}, "source": {"zone": "deck", "selection": "random", "copy": "exact"}})
+    # Variable power buff: give it +X/+Y (X/Y is ...)
+    variable_buff = re.search(r"give\s+it\s+([+-])x/([+-])y", text, re.I)
+    if variable_buff:
+        var_target = target or {"scope": "any", "selection": "chosen", "count": 1}
+        var_item = {"kind": "buff", "target": var_target, "attack": "var:X", "life": "var:Y"}
+        if variable_buff.group(1) == "-":
+            var_item["attack"] = "-var:X"
+        if variable_buff.group(2) == "-":
+            var_item["life"] = "-var:Y"
+        node["effects"].append(var_item)
+    # Add N copies of X to your deck
+    add_deck = re.search(r"add\s+(?:(\d+)\s+copies of\s+|an?\s+)?([^.;\"]+?)\s+to your deck", text, re.I)
+    if add_deck and not dynamic_hand_copy:
+        add_deck_names, add_deck_trailer = _split_card_names(add_deck.group(2) or "")
+        for name in add_deck_names:
+            if name:
+                node["effects"].append({"kind": "add_to_hand", "count": int(add_deck.group(1) or 1), "source_card_name": name, "target_zone": "deck"})
+        if add_deck_trailer:
+            child = clause_to_ast({**clause, "plain": add_deck_trailer})
+            node["effects"].extend(child.get("effects", []))
+    # Reduce the cost of all followers/cards in your deck by N
+    deck_cost = re.search(r"reduce the cost of all\s+([a-z]+)\s+(spells?|followers?|amulets?|cards?)\s+in your deck by\s+(\d+)", text, re.I)
+    if deck_cost:
+        deck_filters = {"zone": "deck", "tribe": deck_cost.group(1).lower()}
+        deck_ct = deck_cost.group(2).lower().rstrip("s")
+        if deck_ct != "card":
+            deck_filters["card_type"] = deck_ct
+        node["effects"].append({"kind": "modify_cost", "target": {"scope": "any", "selection": "all", "filters": deck_filters}, "amount": -int(deck_cost.group(3))})
+    # Transform a random spell/card in your hand into X
+    transform_hand_random = re.search(r"transform\s+a\s+random\s+(spell|card)\s+in\s+your\s+hand\s+into\s+(?:an?\s+|copies of\s+)?([^.;\"]+)", text, re.I)
+    if transform_hand_random:
+        thr_filters = {"zone": "hand"}
+        if transform_hand_random.group(1).lower() != "card":
+            thr_filters["card_type"] = transform_hand_random.group(1).lower()
+        node["effects"].append({"kind": "transform", "target": {"scope": "any", "selection": "random", "count": 1, "filters": thr_filters}, "source_card_name": transform_hand_random.group(2).strip()})
+    # Generic replacement parsing happens before the ordinary heal/damage
+    # regexes above.  Those regexes can also see the base sentence and append
+    # it once more; remove only an exact duplicate of a conditional's else
+    # branch, leaving unrelated follow-up effects intact.
+    conditional_else = {
+        json_signature(item)
+        for effect_item in node["effects"]
+        if effect_item.get("kind") == "conditional"
+        for item in effect_item.get("else_effects", [])
+    }
+    if conditional_else:
+        node["effects"] = [
+            effect_item for effect_item in node["effects"]
+            if effect_item.get("kind") == "conditional" or json_signature(effect_item) not in conditional_else
+        ]
+    if node.pop("_dedupe_top_level_effects", False):
+        seen_effects = set()
+        deduped_effects = []
+        for effect_item in node["effects"]:
+            marker = json_signature(effect_item)
+            if marker not in seen_effects:
+                seen_effects.add(marker)
+                deduped_effects.append(effect_item)
+        node["effects"] = deduped_effects
+    if evolved_restore_match:
+        # ``super-evolved`` is a stronger form of ``evolved``.  Keep an
+        # explicit nested conditional so the 2-defense replacement is not
+        # flattened into an unconditional heal or a modify-previous marker.
+        draw_effect = next((item for item in node["effects"] if item.get("kind") == "draw"), {"kind": "draw", "count": 1})
+        heal_one = {"kind": "heal", "target": {"scope": "ally_leader"}, "amount": 1}
+        heal_two = {"kind": "heal", "target": {"scope": "ally_leader"}, "amount": 2}
+        node["effects"] = [draw_effect, {
+            "kind": "conditional",
+            "condition": {"state": "super_evolved", "cmp": "eq", "value": True},
+            "effects": [heal_two],
+            "else_effects": [{
+                "kind": "conditional",
+                "condition": {"state": "evolved", "cmp": "eq", "value": True},
+                "effects": [heal_one],
+            }],
+        }]
+    # Keyword/status extraction has several intentionally overlapping
+    # templates (for example ``give it Bane and this follower Storm``).  Do
+    # not emit the same idempotent grant twice; repeated damage/summon nodes
+    # remain untouched because their multiplicity is meaningful.
+    seen_idempotent: set[str] = set()
+    deduped_idempotent: list[dict[str, Any]] = []
+    for effect_item in node["effects"]:
+        if effect_item.get("kind") in {"grant_keyword", "grant_status", "grant_resource_ability"}:
+            marker = json_signature(effect_item)
+            if marker in seen_idempotent:
+                continue
+            seen_idempotent.add(marker)
+        deduped_idempotent.append(effect_item)
+    node["effects"] = deduped_idempotent
+    if faith_mode_ability:
+        # Preserve the printed order ``reduce Faith, then grant its listener``
+        # rather than letting the generic quoted-status pass place the
+        # resource mutation after the ability grant.
+        faith_reductions = [
+            item for item in node["effects"]
+            if item.get("kind") == "modify_resource" and item.get("resource") == "faith" and isinstance(item.get("amount"), (int, float)) and item.get("amount") < 0
+        ]
+        if faith_reductions:
+            node["effects"] = faith_reductions + [item for item in node["effects"] if item not in faith_reductions]
+    # Dynamic copy extraction runs before the generic discard templates.  If
+    # the printed sentence discards first (``Discard your hand. Add ...``),
+    # restore that ordering so a later event interpreter sees the same state
+    # transition and does not copy cards that should already be gone.
+    discard_position = re.search(r"\bdiscard\b|舍弃", text, re.I)
+    copy_position = re.search(r"\b(?:add|summon)\s+(?:an?\s+)?(?:exact\s+)?copy", text, re.I)
+    if discard_position and copy_position and discard_position.start() < copy_position.start():
+        discard_effects = [item for item in node["effects"] if item.get("kind") == "discard"]
+        if discard_effects:
+            node["effects"] = discard_effects + [item for item in node["effects"] if item.get("kind") != "discard"]
+    # Likewise, ``banish/destroy it, then add/summon a copy`` must remove the
+    # selected entity before the copy operation.  The copy still carries a
+    # source selector so an executor can snapshot the entity before removal.
+    remove_position = re.search(r"\b(?:banish|destroy)\s+(?:it|this\s+card|the\s+selected)", text, re.I)
+    if remove_position and copy_position and remove_position.start() < copy_position.start():
+        removal_effects = [item for item in node["effects"] if item.get("kind") in {"banish", "destroy"}]
+        if removal_effects:
+            node["effects"] = removal_effects + [item for item in node["effects"] if item.get("kind") not in {"banish", "destroy"}]
+    # Preserve the explicit sacrifice order in templates such as
+    # ``Destroy this card. Select ... and summon an exact copy``.  Dynamic
+    # selector recognition runs before the generic destroy pass, so move that
+    # self-destroy back to the front after all effects are known.
+    if re.search(r"destroy\s+this\s+card", action_text, re.I) and re.search(r"select\s+", action_text, re.I):
+        self_destroy = next((item for item in node["effects"] if item.get("kind") == "destroy" and item.get("target", {}).get("scope") == "self"), None)
+        if self_destroy is not None:
+            node["effects"] = [self_destroy] + [item for item in node["effects"] if item is not self_destroy]
+    # Preserve the source order for event-triggered pronouns: ``give it ...,
+    # deal ..., and restore ...`` applies the status to the triggering object
+    # before resolving the two leader effects.
+    trigger_status = [
+        item for item in node["effects"]
+        if item.get("kind") == "grant_status"
+        and isinstance(item.get("target"), dict)
+        and item["target"].get("scope") == "trigger_source"
+    ]
+    if trigger_status:
+        node["effects"] = trigger_status + [item for item in node["effects"] if item not in trigger_status]
     if not node["effects"]:
         node["unparsed"].append(text)
         node["unparsed_clauses"].append(text)
-    node["confidence"] = 1.0 if node["effects"] and not node["unparsed"] else 0.0
+    node["confidence"] = 1.0 if node["effects"] and not node["unparsed"] and not node["unparsed_clauses"] else 0.0
     return node
 
 
@@ -714,15 +2233,17 @@ def card_to_ast(card: dict[str, Any], primary_language: str = "eng") -> dict[str
         if primary_language == "eng":
             preferred = eng or chs or values[0]
             if eng:
-                classification = "matched" if eng.get("effects") else "unparsed"
-                confidence = 1.0 if eng.get("effects") else 0.0
+                complete = bool(eng.get("effects")) and not eng.get("unparsed") and not eng.get("unparsed_clauses")
+                classification = "matched" if complete else "unparsed"
+                confidence = 1.0 if complete else 0.0
             else:
                 classification, confidence = "missing_translation", 0.5
         elif primary_language == "chs":
             preferred = chs or eng or values[0]
             if chs:
-                classification = "matched" if chs.get("effects") else "unparsed"
-                confidence = 1.0 if chs.get("effects") else 0.0
+                complete = bool(chs.get("effects")) and not chs.get("unparsed") and not chs.get("unparsed_clauses")
+                classification = "matched" if complete else "unparsed"
+                confidence = 1.0 if complete else 0.0
             else:
                 classification, confidence = "missing_translation", 0.5
         elif chs and eng and classification == "parser_asymmetry":

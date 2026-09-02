@@ -19,6 +19,8 @@ BOUNDARY_RE = re.compile(r"<(?P<open>ev|sev)>|</(?P<close>ev|sev)>|<hr\s*/?>", r
 UNKNOWN_TAG_RE = re.compile(r"</?([a-zA-Z][\w-]*)(?:\s[^>]*)?>")
 TRIGGER_PATTERNS = [
     ("on_fanfare", re.compile(r"fanfare|入场曲|出击" , re.I)),
+    ("on_draw", re.compile(r"when\s+you\s+draw\s+this\s+card|when\s+this\s+card\s+is\s+drawn|抽到.*这张卡", re.I)),
+    ("on_discard", re.compile(r"when\s+this\s+card\s+is\s+discarded|discarded\s*[:：]|舍弃.*这张卡", re.I)),
     ("on_ally_follower_super_evolve", re.compile(r"(?:whenever|when) an allied follower super-?evolves?|自己的随从超进化时", re.I)),
     ("on_enemy_follower_super_evolve", re.compile(r"(?:whenever|when) an enemy follower super-?evolves?|对手的随从超进化时", re.I)),
     ("on_super_evolve", re.compile(r"super-?evolve\s*:|when this follower super-?evolves?|本随从超进化时|超进化时", re.I)),
@@ -81,8 +83,29 @@ def unknown_tags(text: str) -> list[str]:
 
 
 def trigger_for(clause: str) -> str:
+    # Keywords embedded in a quoted status body are not the trigger of the
+    # surrounding ability.  For example, ``give it "Last Words: Summon ..."``
+    # is a selection/grant instruction, not an ``on_last_word`` clause.  Strip
+    # quoted bodies for trigger detection while preserving the original text
+    # for the AST/source audit.
+    visible = re.sub(r'["“「『][^"”」』]*["”」』]', "", clause or "")
+    # A clause can mention another ability name in its body (for example
+    # ``Evolve: Replicate this card's Fanfare ability``).  The broad keyword
+    # patterns below would otherwise classify that clause as ``on_fanfare``.
+    # Prefer an explicit leading event marker, which is the only reliable
+    # discriminator when a sentence contains nested ability names.
+    leading = visible.strip()
+    explicit_prefixes = (
+        ("on_super_evolve", r"(?:super[- ]?evolve|超进化时)\s*(?:\([^)]*\))?\s*[:：]"),
+        ("on_evolve", r"(?:evolve|进化时)\s*(?:\([^)]*\))?\s*[:：]"),
+        ("on_engage", r"(?:engage|激奏|激活|启动)\s*(?:\([^)]*\))?\s*[:：]?"),
+        ("on_fanfare", r"(?:fanfare|入场曲|出击)\s*[:：]"),
+    )
+    for trigger, pattern in explicit_prefixes:
+        if re.match(pattern, leading, re.I):
+            return trigger
     for trigger, pattern in TRIGGER_PATTERNS:
-        if pattern.search(clause):
+        if pattern.search(visible):
             return trigger
     return "static"
 

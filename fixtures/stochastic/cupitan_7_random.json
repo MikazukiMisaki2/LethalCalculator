@@ -1,0 +1,47 @@
+{
+  "name": "Cupitan 7 random damage with a refreshed target pool",
+  "card_id": 10413110,
+  "trigger": "on_evolve",
+  "source_uid": 1000,
+  "ep": 1,
+  "enemy_board": [
+    {"unique_id": 9000, "card_id": 9900, "atk": 1, "hp": 3},
+    {"unique_id": 9001, "card_id": 9901, "atk": 1, "hp": 3},
+    {"unique_id": 9002, "card_id": 9902, "atk": 1, "hp": 3}
+  ],
+  "expected_distribution": [
+    {
+      "enemy_board": [{"unique_id": 9000, "hp": 2}],
+      "probability": {"numerator": 335, "denominator": 1944}
+    },
+    {
+      "enemy_board": [
+        {"unique_id": 9000, "hp": 1},
+        {"unique_id": 9001, "hp": 1}
+      ],
+      "probability": {"numerator": 313, "denominator": 1944}
+    },
+    {
+      "enemy_board": [
+        {"unique_id": 9000, "hp": 1},
+        {"unique_id": 9002, "hp": 1}
+      ],
+      "probability": {"numerator": 313, "denominator": 1944}
+    },
+    {
+      "enemy_board": [{"unique_id": 9001, "hp": 2}],
+      "probability": {"numerator": 335, "denominator": 1944}
+    },
+    {
+      "enemy_board": [
+        {"unique_id": 9001, "hp": 1},
+        {"unique_id": 9002, "hp": 1}
+      ],
+      "probability": {"numerator": 313, "denominator": 1944}
+    },
+    {
+      "enemy_board": [{"unique_id": 9002, "hp": 2}],
+      "probability": {"numerator": 335, "denominator": 1944}
+    }
+  ]
+}

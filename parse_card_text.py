@@ -31,7 +31,10 @@ def main() -> int:
             stats["parsed_clauses"] += bool(clause.get("effects"))
             stats["unparsed_clauses"] += len(clause.get("unparsed_clauses", []))
             stats.update(effect.get("kind") for effect in clause.get("effects", []))
-    output = {"schema_version": 1, "normalized_source": str(args.input), "primary_language": args.primary_language, "cards": ast_cards}
+    # Keep provenance stable across build directories.  Absolute temporary
+    # paths are operational details, not part of the AST content and would
+    # make otherwise identical builds hash differently.
+    output = {"schema_version": 1, "normalized_source": args.input.name, "primary_language": args.primary_language, "cards": ast_cards}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

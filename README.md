@@ -20,6 +20,8 @@ A one-turn-kill (lethal) solver for *Shadowverse Worlds Beyond*. Given a board /
 | `normalize_card_text.py` | 中英双语卡牌文本归一化 |
 | `compile_card_rules.py` | 将文本 AST 编译为可执行卡牌规则 |
 | `merge_card_rules.py` | 合并生成规则与人工覆盖（`card_rules_overrides.json`） |
+| `validate_contract.py` | Step 7 发布合同：Schema、引用词汇和逐卡覆盖门禁 |
+| `rule_coverage.py` | 生成/校验确定性的逐卡支持覆盖报告 |
 | `event_interpreter.py` | 解释卡牌事件对局面的影响 |
 | `stochastic_calculator.py` | 随机伤害/抽牌的精确概率计算 |
 | `lethal_engine.py` | 斩杀搜索求解器（记忆化深度优先） |
@@ -46,11 +48,12 @@ python -m unittest discover -s . -p "test_*.py"
 ```bash
 python clean_cards.py          # 生成 data/generated/card_catalog.json
 python compile_card_rules.py   # 生成 data/generated/card_rules_generated.json
-python merge_card_rules.py     # 合并人工覆盖 -> data/generated/card_rules_v2.json
+python merge_card_rules.py     # 合并人工覆盖 -> data/generated/card_rules_v2.json + coverage report
+python validate_contract.py    # Step 7：Schema、引用词汇、逐卡覆盖完整门禁
 ```
 
 人工覆盖规则的使用规范见 `docs/manual_overrides.md`。
 
 ## 测试
 
-项目自带单元测试（`test_*.py`），覆盖：斩杀引擎示例路线、事件解释器、快照适配、文本归一化、规则 schema 校验等，共 51 项。
+项目自带单元测试（`test_*.py`），覆盖：斩杀引擎示例路线、事件解释器、快照适配、文本归一化、规则 schema 校验、Step 7 合同门禁等，共 146 项。

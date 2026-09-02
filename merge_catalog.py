@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -95,12 +94,10 @@ def main() -> int:
     if args.legacy_effects:
         legacy_payload, _, _ = _load(args.legacy_effects)
         comparison["legacy"] = _compare_and_enrich(catalog, _legacy_cards(legacy_payload))
-    catalog["source"]["generated_at"] = datetime.now(timezone.utc).isoformat()
-
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    report = {"generated_at": catalog["source"]["generated_at"], "stats": stats, "comparison": comparison}
+    report = {"stats": stats, "comparison": comparison}
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     conflicts = comparison.get("legacy") or {}
     conflict_count = len(conflicts.get("relation_mismatches", [])) + len(conflicts.get("type_mismatches", []))

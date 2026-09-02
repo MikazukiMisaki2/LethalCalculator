@@ -1,4 +1,8 @@
-"""Validate CardCatalog/CardRules fixtures with JSON Schema Draft 2020-12."""
+"""Validate CardCatalog/CardRules fixtures with JSON Schema Draft 2020-12.
+
+Use ``validate_contract.py`` for the full Step 7 cross-document gate
+(references, vocabularies, support matrix, and coverage report).
+"""
 
 from __future__ import annotations
 

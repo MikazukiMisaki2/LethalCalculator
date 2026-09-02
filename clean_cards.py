@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -310,7 +309,7 @@ def build_catalog_from_crawler(
         card = clean_crawler_card(raw_id, raw_chs, raw_en, relation if isinstance(relation, dict) else {}, structured_by_id.get(raw_id))
         if card is not None:
             cards[str(card["card_id"])] = card
-    source = {"crawler_chs_sha256": chs_sha256, "crawler_en_sha256": en_sha256, "source_url": chs_source, "generated_at": datetime.now(timezone.utc).isoformat()}
+    source = {"crawler_chs_sha256": chs_sha256, "crawler_en_sha256": en_sha256, "source_url": chs_source}
     if structured_sha256:
         source["structured_cards_sha256"] = structured_sha256
     catalog = {
@@ -350,7 +349,6 @@ def build_catalog(payload: Any, *, source: str, source_sha256: str) -> tuple[dic
         "source": {
             "cards_json_sha256": source_sha256,
             "source_url": source,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
         },
         "type_map": {
             "follower": 1,
