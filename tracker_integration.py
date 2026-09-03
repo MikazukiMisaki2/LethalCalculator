@@ -16,6 +16,8 @@ from typing import Any, Mapping
 from lethal_engine import LethalEngine
 from lethal_models import LethalResult, LethalState
 from snapshot_adapter import SnapshotAdapter, SnapshotAdapterResult
+from shadow_state_adapter import build_shadow_engine
+from swb_rl_backend import SwbRlBackend
 
 
 def _fingerprint(snapshot: Mapping[str, Any]) -> str:
@@ -205,11 +207,11 @@ class TrackerLethalSession:
             revision=self._revision,
             fingerprint=digest,
             changed=True,
-                status=status,
-                probability=probability,
-                max_damage=max_damage,
-                sequence=sequence,
-                max_damage_sequence=max_damage_sequence,
+            status=status,
+            probability=probability,
+            max_damage=max_damage,
+            sequence=sequence,
+            max_damage_sequence=max_damage_sequence,
             trusted=adapted.trusted,
             usable=adapted.usable,
             is_ally_turn=adapted.is_ally_turn,
@@ -317,8 +319,153 @@ class TrackerLethalSession:
         return tuple(int(item) for item in value if isinstance(item, int) and not isinstance(item, bool))
 
 
+class TrackerShadowLethalSession(TrackerLethalSession):
+    """Tracker session backed by SWB-RL's native RuleBook and engine.
+
+    This is an opt-in companion to :class:`TrackerLethalSession`.  It keeps
+    the same view/selection contract, but builds a fresh
+    ``TrackerShadowEngine`` for each changed snapshot and searches that engine
+    through ``SwbRlBackend``.  Public Tracker data is not sufficient for a
+    complete match replay (deck order and hidden opponent zones are absent),
+    so every such result is downgraded to ``INCOMPLETE`` with the precise
+    hydration warnings attached.
+    """
+
+    def __init__(
+        self,
+        *,
+        catalog: Mapping[str, Any] | None = None,
+        rules: Mapping[str, Any] | None = None,
+        max_depth: int = 12,
+        node_limit: int = 10_000,
+        swb_rl_root: str | None = None,
+        seed: int = 0,
+    ) -> None:
+        # Call the base constructor for the public selection/view helpers.  A
+        # CardRules engine is not used by ``refresh``; keeping it here avoids
+        # a second subtly different UI API for target selection.
+        super().__init__(catalog=catalog, rules=rules, max_depth=max_depth)
+        self.node_limit = max(1, int(node_limit))
+        self.swb_rl_root = swb_rl_root
+        self.seed = int(seed)
+        self.backend = SwbRlBackend(max_depth=max_depth, node_limit=self.node_limit)
+
+    def refresh(self, snapshot: Mapping[str, Any]) -> TrackerSolveView:
+        digest = _fingerprint(snapshot)
+        if self._view is not None and digest == self._fingerprint:
+            return replace(self._view, changed=False)
+
+        effective_catalog = self.catalog
+        effective_rules = self.rules
+        # The adapter needs the normalized catalog/rules for evolution aliases
+        # and public names, even though SWB-RL supplies the executable rules.
+        adapted = SnapshotAdapter.adapt(
+            snapshot,
+            catalog=effective_catalog,
+            rules=effective_rules,
+        )
+        self._revision += 1
+        status = "INCOMPLETE"
+        probability = 0.0
+        sequence: tuple[str, ...] = ()
+        max_damage = 0
+        max_damage_sequence: tuple[str, ...] = ()
+        warnings = list(adapted.warnings)
+        if adapted.trusted and adapted.usable:
+            try:
+                built = build_shadow_engine(
+                    snapshot,
+                    adapted,
+                    swb_rl_root=self.swb_rl_root,
+                    seed=self.seed,
+                )
+                warnings.extend(built.warnings)
+                if built.engine is None:
+                    sequence = tuple(
+                        f"[incomplete: {warning}]"
+                        for warning in (built.warnings or ("shadow engine unavailable",))
+                    )
+                else:
+                    result = self.backend.solve(built.engine, player_index=0)
+                    status = result.status
+                    probability = float(result.probability)
+                    sequence = tuple(result.sequence)
+                    max_damage = max(0, int(result.max_damage))
+                    max_damage_sequence = tuple(result.max_damage_sequence)
+                    warnings.extend(result.warnings)
+                    # A shadow engine is deliberately not allowed to claim a
+                    # complete/confirmed route while hidden state or deck
+                    # order was synthesized.  This guard is independent of
+                    # the backend's random-seed warning.
+                    if (
+                        built.hidden_state_unknown
+                        or built.card_order_unknown
+                        or built.warnings
+                    ) and status in {"CONFIRMED", "NO_LETHAL", "PROBABILISTIC"}:
+                        status = "INCOMPLETE"
+                        warnings.append(
+                            "shadow state is partial; native result is advisory only"
+                        )
+            except Exception as exc:
+                status = "INCOMPLETE"
+                warnings.append(f"shadow solver error: {type(exc).__name__}: {exc}")
+                sequence = ("[incomplete: shadow solver error]",)
+        else:
+            reasons = adapted.trust_reasons or ("snapshot is not usable",)
+            sequence = tuple(f"[incomplete: {reason}]" for reason in reasons)
+
+        view = TrackerSolveView(
+            revision=self._revision,
+            fingerprint=digest,
+            changed=True,
+            status=status,
+            probability=probability,
+            sequence=sequence,
+            trusted=adapted.trusted,
+            usable=adapted.usable,
+            is_ally_turn=adapted.is_ally_turn,
+            max_damage=max_damage,
+            max_damage_sequence=max_damage_sequence,
+            trust_reasons=adapted.trust_reasons,
+            warnings=tuple(dict.fromkeys(str(item) for item in warnings if str(item))),
+            legal_actions=adapted.legal_actions,
+            attack_targets=dict(adapted.state.legal_attack_targets),
+            available_modes=dict(adapted.state.legal_modes),
+            state=adapted.state,
+        )
+        self._fingerprint = digest
+        self._view = view
+        # Keep the same stale-target hygiene as the CardRules session.
+        if not view.trusted or not view.usable:
+            self._selected_targets.clear()
+            self._selected_card_targets.clear()
+        else:
+            valid_uids = set(view.attack_targets)
+            self._selected_targets = {
+                uid: target
+                for uid, target in self._selected_targets.items()
+                if uid in valid_uids and target in view.targets_for(uid)
+            }
+            valid_hand_uids = (
+                {card.unique_id for card in view.state.hand}
+                if view.state is not None
+                else set()
+            )
+            self._selected_card_targets = {
+                uid: target
+                for uid, target in self._selected_card_targets.items()
+                if uid in valid_hand_uids
+            }
+        return view
+
+
 # A descriptive alias for integrations that prefer controller terminology.
 TrackerSnapshotController = TrackerLethalSession
 
 
-__all__ = ["TrackerLethalSession", "TrackerSnapshotController", "TrackerSolveView"]
+__all__ = [
+    "TrackerLethalSession",
+    "TrackerShadowLethalSession",
+    "TrackerSnapshotController",
+    "TrackerSolveView",
+]

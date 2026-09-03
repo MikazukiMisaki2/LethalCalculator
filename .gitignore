@@ -6,3 +6,6 @@ __pycache__/
 
 # Generated build artifacts (rebuilt by clean_cards.py / compile_card_rules.py)
 data/generated/
+
+# Read-only imports and compatibility reports (rebuilt by import_swb_rl.py)
+data/imported/
